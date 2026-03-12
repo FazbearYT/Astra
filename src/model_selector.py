@@ -324,7 +324,7 @@ class AdaptiveModelSelector:
                     ('lr', LogisticRegression(
                         max_iter=1000,
                         random_state=42,
-                        multi_class='auto'
+                        # multi_class удален в sklearn 1.5+, теперь автоматически
                     ))
                 ]),
                 profile_requirements={
