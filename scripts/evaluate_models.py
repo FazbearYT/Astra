@@ -3,7 +3,6 @@
 """
 import sys
 import os
-
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 import numpy as np
@@ -14,18 +13,21 @@ from sklearn.metrics import (
     accuracy_score, precision_score, recall_score, f1_score,
     confusion_matrix, classification_report, roc_auc_score
 )
+import matplotlib
+matplotlib.use('Agg')  # Неинтерактивный режим
 import matplotlib.pyplot as plt
 import seaborn as sns
 from src.model_selector import AdaptiveModelSelector
+from sklearn.model_selection import train_test_split
 
 
 def evaluate_saved_models(models_dir: str = "models/iris_models"):
     """
     Оценка сохранённых моделей
     """
-    print("\n" + "=" * 70)
+    print("\n" + "="*70)
     print("📊 ОЦЕНКА СОХРАНЁННЫХ МОДЕЛЕЙ")
-    print("=" * 70)
+    print("="*70)
 
     models_dir = Path(models_dir)
 
@@ -54,7 +56,6 @@ def evaluate_saved_models(models_dir: str = "models/iris_models"):
     iris = load_iris()
     X, y = iris.data, iris.target
 
-    from sklearn.model_selection import train_test_split
     X_train, X_test, y_train, y_test = train_test_split(
         X, y, test_size=0.2, random_state=42, stratify=y
     )
@@ -67,21 +68,23 @@ def evaluate_saved_models(models_dir: str = "models/iris_models"):
     print(f"✓ Загружено {len(selector.models)} моделей")
 
     # Оценка каждой модели
-    print("\n" + "=" * 70)
+    print("\n" + "="*70)
     print("📈 РЕЗУЛЬТАТЫ ОЦЕНКИ")
-    print("=" * 70)
+    print("="*70)
 
     results = []
 
     for model in selector.models:
-        if not model.is_trained:
-            print(f"\n⏭️  Пропущено (не обучена): {model.name}")
-            continue
-
         print(f"\n🤖 Модель: {model.name}")
         print("-" * 50)
 
         try:
+            # 🔧 ИСПРАВЛЕНИЕ 1: Если модель не обучена, пробуем обучить
+            if not model.is_trained:
+                print(f"   ⚠️  Модель не обучена, обучаем...")
+                model.fit(X_train, y_train)
+                print(f"   ✅ Модель обучена")
+
             # Предсказание
             y_pred = model.predict(X_test)
 
@@ -107,11 +110,13 @@ def evaluate_saved_models(models_dir: str = "models/iris_models"):
 
         except Exception as e:
             print(f"  ⚠️  Ошибка: {e}")
+            import traceback
+            traceback.print_exc()
 
     # Сводная таблица
-    print("\n" + "=" * 70)
+    print("\n" + "="*70)
     print("📊 СВОДНАЯ ТАБЛИЦА")
-    print("=" * 70)
+    print("="*70)
 
     print(f"\n{'Модель':<35} {'Accuracy':<10} {'F1-Score':<10} {'Время (с)':<10}")
     print("-" * 70)
@@ -154,7 +159,7 @@ def evaluate_saved_models(models_dir: str = "models/iris_models"):
     viz_path = models_dir / "models_comparison.png"
     plt.savefig(str(viz_path), dpi=300, bbox_inches='tight')
     print(f"✓ Визуализация сохранена: {viz_path}")
-    plt.show()
+    plt.close('all')
 
     # Матрица ошибок для лучшей модели
     print("\n📊 Матрица ошибок для лучшей модели...")
@@ -176,7 +181,7 @@ def evaluate_saved_models(models_dir: str = "models/iris_models"):
     cm_path = models_dir / "confusion_matrix.png"
     plt.savefig(str(cm_path), dpi=300, bbox_inches='tight')
     print(f"✓ Матрица ошибок сохранена: {cm_path}")
-    plt.show()
+    plt.close('all')
 
     # Сохранение результатов
     results_path = models_dir / "evaluation_results.json"
@@ -190,9 +195,9 @@ def evaluate_saved_models(models_dir: str = "models/iris_models"):
 
     print(f"✓ Результаты сохранены: {results_path}")
 
-    print("\n" + "=" * 70)
+    print("\n" + "="*70)
     print("✅ ОЦЕНКА ЗАВЕРШЕНА")
-    print("=" * 70)
+    print("="*70)
 
     return results
 
@@ -201,12 +206,11 @@ def compare_with_baseline(models_dir: str = "models/iris_models"):
     """
     Сравнение с базовой моделью
     """
-    print("\n" + "=" * 70)
+    print("\n" + "="*70)
     print("📊 СРАВНЕНИЕ С БАЗОВОЙ МОДЕЛЬЮ")
-    print("=" * 70)
+    print("="*70)
 
     from sklearn.dummy import DummyClassifier
-    from sklearn.model_selection import train_test_split
 
     iris = load_iris()
     X, y = iris.data, iris.target
@@ -244,11 +248,11 @@ def main():
 
     parser = argparse.ArgumentParser(description='Оценка обученных моделей')
     parser.add_argument('--models-dir', type=str, default='models/iris_models',
-                        help='Директория с моделями')
+                       help='Директория с моделями')
     parser.add_argument('--compare-baseline', action='store_true',
-                        help='Сравнить с базовой моделью')
+                       help='Сравнить с базовой моделью')
     parser.add_argument('--output', type=str, default='models/evaluation_report.json',
-                        help='Путь для отчёта')
+                       help='Путь для отчёта')
 
     args = parser.parse_args()
 

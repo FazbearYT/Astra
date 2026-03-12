@@ -40,7 +40,7 @@ adaptive_ml_system/
 ```bash
 # Клонирование репозитория
 git clone <repository_url>
-cd adaptive_ml_system
+cd <repository_name>
 
 # Создание виртуального окружения
 python -m venv venv
@@ -57,13 +57,13 @@ pip install -r requirements.txt
 # 1. Установка
 pip install -r requirements.txt
 
-# 2. Обучение на Iris
+# 2. Обучение на Iris (20-60 сек)
 python scripts/train_iris_models.py
 
-# 3. Загрузка Oxford Flowers
+# 3. Загрузка Oxford Flowers (1-3 минуты)
 python scripts/download_oxford_flowers.py
 
-# 4. Обучение YOLO
+# 4. Обучение YOLO (ДОЛГО! Может занять несколько часов)
 python scripts/train_yolo_flowers.py
 
 # 5. Оценка моделей

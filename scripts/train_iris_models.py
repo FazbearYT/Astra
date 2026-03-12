@@ -15,6 +15,11 @@ import joblib
 import json
 from pathlib import Path
 
+# 🔧 ИСПРАВЛЕНИЕ 2: Устанавливаем неинтерактивный режим matplotlib
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+
 
 def main():
     """Основной пайплайн обучения на Iris Dataset"""
@@ -52,8 +57,17 @@ def main():
     profile_path.parent.mkdir(exist_ok=True)
     profile.save(str(profile_path))
 
-    # Визуализация
-    profiler.visualize_profile(save_path="models/iris_profile_visualization.png")
+    # Визуализация с исправлением
+    print("\n📈 Создание визуализации...")
+    try:
+        profiler.visualize_profile(save_path="models/iris_profile_visualization.png")
+        plt.close('all')  # Обязательно закрываем фигуры
+        print("✓ Визуализация сохранена: models/iris_profile_visualization.png")
+    except Exception as e:
+        print(f"⚠️  Предупреждение: Не удалось создать визуализацию: {e}")
+        print("   Продолжаем без визуализации...")
+
+    # Вывод сводки
     profiler.print_summary()
 
     # 4. Создание и обучение моделей
@@ -76,6 +90,15 @@ def main():
         data_profile=profile.to_dict(),
         cv_folds=5
     )
+
+    # 🔧 ИСПРАВЛЕНИЕ 2: Дообучаем все модели перед сохранением
+    print("\n🔧 Дообучение всех моделей...")
+    for model in selector.models:
+        if not model.is_trained:
+            print(f"   Обучение: {model.name}")
+            model.fit(X_train, y_train)
+
+    print("✅ Все модели обучены")
 
     # 6. Финальная оценка
     print("\n📈 Финальная оценка на тестовом наборе...")
@@ -103,11 +126,11 @@ def main():
     # Сохранение метаданных
     metadata = {
         'dataset': 'Iris',
-        'n_samples': X.shape[0],
-        'n_features': X.shape[1],
-        'n_classes': len(iris.target_names),
-        'class_names': iris.target_names.tolist(),
-        'feature_names': iris.feature_names.tolist(),
+        'n_samples': int(X.shape[0]),
+        'n_features': int(X.shape[1]),
+        'n_classes': int(len(iris.target_names)),
+        'class_names': [str(name) for name in iris.target_names],
+        'feature_names': [str(name) for name in iris.feature_names],
         'best_model': best_model.name,
         'test_accuracy': float(accuracy),
         'timestamp': str(np.datetime64('now'))
@@ -155,7 +178,11 @@ def load_and_use_model(models_dir: str = "models/iris_models"):
     models_dir = Path(models_dir)
 
     # Загрузка метаданных
-    with open(models_dir / "metadata.json", 'r') as f:
+    metadata_path = models_dir / "metadata.json"
+    if not metadata_path.exists():
+        raise FileNotFoundError(f"Метаданные не найдены: {metadata_path}")
+
+    with open(metadata_path, 'r') as f:
         metadata = json.load(f)
 
     print(f"  Датасет: {metadata['dataset']}")
@@ -170,13 +197,24 @@ def load_and_use_model(models_dir: str = "models/iris_models"):
 
     print(f"✓ Загружено {len(selector.models)} моделей")
 
+    # 🔧 ИСПРАВЛЕНИЕ: Устанавливаем лучшую модель из метаданных
+    best_model_name = metadata['best_model']
+    for model in selector.models:
+        if model.name == best_model_name:
+            selector.best_model = model
+            print(f"✅ Установлена лучшая модель: {model.name}")
+            break
+
+    if selector.best_model is None:
+        raise ValueError(f"Лучшая модель '{best_model_name}' не найдена среди загруженных!")
+
     # Пример предсказания
     new_sample = np.array([[5.0, 3.4, 1.5, 0.2]])
     prediction = selector.predict(new_sample)
 
     print(f"\n📊 Пример предсказания:")
     print(f"  Вход: {new_sample[0]}")
-    print(f"  Класс: {metadata['class_names'][prediction[0]]}")
+    print(f"  Класс: {metadata['class_names'][int(prediction[0])]}")
 
     return selector
 
