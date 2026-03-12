@@ -463,6 +463,7 @@ class AdaptiveMLApp:
             print("   1. Положите CSV в data/tabular/")
             print("   2. ИЛИ создайте тестовый датасет")
             print("   3. ИЛИ используйте встроенный Iris")
+            print("   DEVELOP TRICK: try scripts/download_all_datasets.py to get more data for tests")
             print()
             input("👉 Enter для начала...")
 

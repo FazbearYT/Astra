@@ -252,7 +252,13 @@ python app.py
 # Результат: Точность ~95-100%
 ```
 
-### Пример 2: Свои данные
+### Пример 2: Предзагруженные датасеты
+
+```bash
+python scripts/download_all_datasets.py
+python app.py
+```
+### Пример 3: Свои данные
 
 ```csv
 # data/tabular/sales.csv
@@ -270,7 +276,7 @@ python app.py
 # Результат: Модель для предсказания успешных продаж
 ```
 
-### Пример 3: Использование сохранённой модели
+### Пример 4: Использование сохранённой модели
 
 ```python
 from src.model_selector import AdaptiveModelSelector
