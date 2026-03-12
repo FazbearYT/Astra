@@ -9,14 +9,14 @@ import random
 
 def create_tabular_datasets():
     print("="*70)
-    print("📊 СОЗДАНИЕ ТАБЛИЧНЫХ ДАТАСЕТОВ")
+    print("СОЗДАНИЕ ТАБЛИЧНЫХ ДАТАСЕТОВ")
     print("="*70)
 
     tabular_dir = Path("data/tabular")
     tabular_dir.mkdir(parents=True, exist_ok=True)
 
     # Iris
-    print("\n1️⃣  Iris Dataset (150 образцов)")
+    print("\n1. Iris Dataset (150 образцов)")
     iris = load_iris()
     df_iris = pd.DataFrame(iris.data, columns=iris.feature_names)
     df_iris['target'] = iris.target
@@ -27,7 +27,7 @@ def create_tabular_datasets():
     print(f"   ✅ {iris_path}")
 
     # Flowers
-    print("\n2️⃣  Flowers Dataset (300 образцов)")
+    print("\n2. Flowers Dataset (300 образцов)")
     np.random.seed(42)
 
     data = {
@@ -67,7 +67,7 @@ def create_tabular_datasets():
 
 def create_image_datasets():
     print("\n" + "="*70)
-    print("🖼️  СОЗДАНИЕ ТЕСТОВЫХ ИЗОБРАЖЕНИЙ")
+    print("СОЗДАНИЕ ТЕСТОВЫХ ИЗОБРАЖЕНИЙ")
     print("="*70)
 
     images_dir = Path("data/images/test_flowers")
@@ -109,19 +109,19 @@ def create_image_datasets():
 
 
 def main():
-    print("\n🌸 СОЗДАНИЕ ТЕСТОВЫХ ДАТАСЕТОВ")
+    print("\nСОЗДАНИЕ ТЕСТОВЫХ ДАТАСЕТОВ")
     create_tabular_datasets()
     create_image_datasets()
 
     print("\n" + "="*70)
     print("✅ ВСЕ ГОТОВО!")
     print("="*70)
-    print("\n📊 ТАБЛИЧНЫЕ:")
+    print("\nТАБЛИЧНЫЕ:")
     print("   • data/tabular/iris_test.csv")
     print("   • data/tabular/flowers_test.csv")
-    print("\n🖼️  ИЗОБРАЖЕНИЯ:")
+    print("\nИЗОБРАЖЕНИЯ:")
     print("   • data/images/test_flowers/")
-    print("\n💡 Запуск:")
+    print("\nЗапуск:")
     print("   python app.py")
 
 

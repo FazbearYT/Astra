@@ -274,30 +274,30 @@ class DataProfiler:
             raise ValueError("Сначала создайте профиль")
 
         print("\n" + "=" * 70)
-        print(f"📊 ПРОФИЛЬ ДАТАСЕТА: {self.dataset_name.upper()}")
+        print(f"ПРОФИЛЬ ДАТАСЕТА: {self.dataset_name.upper()}")
         print("=" * 70)
 
-        print(f"\n📐 РАЗМЕРЫ:")
+        print(f"\nРАЗМЕРЫ:")
         print(f"   • Образцов: {self.profile.n_samples:,}")
         print(f"   • Признаков: {self.profile.n_features}")
         if self.profile.n_classes:
             print(f"   • Классов: {self.profile.n_classes}")
         print(f"   • Размер в памяти: {self.profile.memory_size_mb:.2f} MB")
 
-        print(f"\n⚖️  БАЛАНС КЛАССОВ:")
+        print(f"\nБАЛАНС КЛАССОВ:")
         if self.profile.class_distribution:
             for cls, count in self.profile.class_distribution.items():
                 pct = count / self.profile.n_samples * 100
                 print(f"   • Класс {cls}: {count} ({pct:.1f}%)")
             print(f"   • Ratio баланса: {self.profile.class_balance_ratio:.3f}")
 
-        print(f"\n🎯 СЛОЖНОСТЬ ДАННЫХ: {self.profile.data_complexity.upper()}")
+        print(f"\nСЛОЖНОСТЬ ДАННЫХ: {self.profile.data_complexity.upper()}")
 
         print(f"\n🤖 РЕКОМЕНДУЕМЫЕ МОДЕЛИ:")
         for model in self.profile.recommended_models:
             print(f"   • {model}")
 
-        print(f"\n🔧 ТРЕБУЕМАЯ ПРЕДОБРАБОТКА:")
+        print(f"\nТРЕБУЕМАЯ ПРЕДОБРАБОТКА:")
         for need in self.profile.preprocessing_needs:
             print(f"   • {need.replace('_', ' ').title()}")
 

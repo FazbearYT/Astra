@@ -114,7 +114,7 @@ def create_sample_flower_datasets():
 
     num_samples_per_class = 10
 
-    print(f"\n📁 Создание {len(classes)} классов по {num_samples_per_class} изображений...")
+    print(f"\nСоздание {len(classes)} классов по {num_samples_per_class} изображений...")
 
     for class_id, class_name in classes.items():
         class_dir = dataset_dir / str(class_id) / class_name
@@ -147,8 +147,8 @@ def create_sample_flower_datasets():
         f.write("  - Простая синтетическая генерация\n")
 
     print(f"\n✅ Датасет создан: {dataset_dir}")
-    print(f"📄 Информация: {readme_path}")
-    print(f"\n💡 Для использования в app.py:")
+    print(f"Информация: {readme_path}")
+    print(f"\nДля использования в app.py:")
     print(f"   1. Поместите изображения в data/images/sample_flowers/")
     print(f"   2. Запустите: python app.py")
     print(f"   3. Выберите опцию 'Автоматическое обнаружение'")
@@ -158,7 +158,7 @@ def create_sample_flower_datasets():
 
 def create_advanced_sample_images():
     print("\n" + "=" * 70)
-    print("🎨 СОЗДАНИЕ РАСШИРЕННОГО ДАТАСЕТА")
+    print("СОЗДАНИЕ РАСШИРЕННОГО ДАТАСЕТА")
     print("=" * 70)
 
     dataset_dir = Path("data/images/advanced_flowers")
@@ -201,7 +201,7 @@ def create_advanced_sample_images():
 
 
 def main():
-    print("\n🌸 ГЕНЕРАТОР ТЕСТОВЫХ ИЗОБРАЖЕНИЙ ЦВЕТОВ")
+    print("\nГЕНЕРАТОР ТЕСТОВЫХ ИЗОБРАЖЕНИЙ ЦВЕТОВ")
     print("=" * 70)
 
     create_sample_flower_datasets()
@@ -213,14 +213,14 @@ def main():
         create_advanced_sample_images()
 
     print("\n" + "=" * 70)
-    print("✅ ГОТОВО!")
+    print("ГОТОВО!")
     print("=" * 70)
-    print("\n📂 Созданные датасеты:")
+    print("\nСозданные датасеты:")
     print("   • data/images/sample_flowers/ (2 класса)")
     if choice == 'y':
         print("   • data/images/advanced_flowers/ (3 класса)")
 
-    print("\n💡 Следующие шаги:")
+    print("\nСледующие шаги:")
     print("   1. Проверьте данные в папке data/images/")
     print("   2. Запустите: python app.py")
     print("   3. Выберите автоматическое обнаружение")
