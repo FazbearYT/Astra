@@ -265,7 +265,7 @@ class AdaptiveModelSelector:
                           data_profile: Optional[Dict] = None,
                           cv_folds: int = 5) -> SpecializedModel:
         print("\n" + "="*70)
-        print("🔄 АДАПТИВНЫЙ ВЫБОР МОДЕЛИ")
+        print("АДАПТИВНЫЙ ВЫБОР МОДЕЛИ")
         print("="*70)
 
         if data_profile is None:
@@ -282,11 +282,11 @@ class AdaptiveModelSelector:
             X, y, test_size=0.2, random_state=42, stratify=y
         )
 
-        print(f"\n📊 Данные:")
+        print(f"\nДанные:")
         print(f"   • Train: {X_train.shape[0]} образцов")
         print(f"   • Test: {X_test.shape[0]} образцов")
 
-        print("\n📋 Оценка соответствия моделей профилю данных:")
+        print("\nОценка соответствия моделей профилю данных:")
         model_scores = []
 
         for model in self.models:
@@ -296,14 +296,14 @@ class AdaptiveModelSelector:
 
         model_scores.sort(key=lambda x: x[1], reverse=True)
 
-        print("\n🤖 Тестирование топ-3 моделей:")
+        print("\nТестирование топ-3 моделей:")
         print("="*70)
 
         best_accuracy = 0.0
         best_model = None
 
         for model, profile_score in model_scores[:3]:
-            print(f"\n🔬 Тестирование: {model.name}")
+            print(f"\nТестирование: {model.name}")
             print(f"   Соответствие профилю: {profile_score:.3f}")
 
             try:
@@ -347,7 +347,7 @@ class AdaptiveModelSelector:
         self.best_model = best_model
 
         print("\n" + "="*70)
-        print(f"🏆 ВЫБРАНА МОДЕЛЬ: {best_model.name}")
+        print(f"ВЫБРАНА МОДЕЛЬ: {best_model.name}")
         print(f"   Итоговый скор: {best_accuracy:.4f}")
         print("="*70)
 

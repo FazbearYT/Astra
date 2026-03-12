@@ -35,7 +35,7 @@ def save_dataset(df: pd.DataFrame, filename: str, description: str):
 
 
 def download_iris():
-    print("\n1️⃣  Iris Dataset...")
+    print("\n1. Iris Dataset...")
     iris = load_iris()
     df = pd.DataFrame(iris.data, columns=iris.feature_names)
     df['target'] = iris.target
@@ -49,7 +49,7 @@ def download_iris():
 
 
 def download_wine():
-    print("\n2️⃣  Wine Dataset...")
+    print("\n2. Wine Dataset...")
     wine = load_wine()
     df = pd.DataFrame(wine.data, columns=wine.feature_names)
     df['target'] = wine.target
@@ -63,7 +63,7 @@ def download_wine():
 
 
 def download_digits():
-    print("\n3️⃣  Digits Dataset...")
+    print("\n3. Digits Dataset...")
     digits = load_digits()
 
     df = pd.DataFrame(digits.data, columns=[f'pixel_{i}' for i in range(64)])
@@ -77,7 +77,7 @@ def download_digits():
 
 
 def download_titanic():
-    print("\n4️⃣  Titanic Dataset...")
+    print("\n4. Titanic Dataset...")
 
     try:
         titanic = fetch_openml(name='titanic', version=1, as_frame=True)
@@ -114,7 +114,7 @@ def download_titanic():
 
 
 def download_synthetic_blobs():
-    print("\n5️⃣  Synthetic Blobs Dataset...")
+    print("\n5. Synthetic Blobs Dataset...")
 
     np.random.seed(42)
     X, y = make_blobs(n_samples=500, n_features=5, centers=3,
@@ -134,7 +134,7 @@ def download_synthetic_blobs():
 def create_summary():
     summary_path = TABULAR_DIR / "DATASETS_SUMMARY.md"
     with open(summary_path, 'w', encoding='utf-8') as f:
-        f.write("# 📊 Тестовые датасеты\n\n")
+        f.write("# Тестовые датасеты\n\n")
         f.write("| Датасет | Файл | Строк | Классов | Признаков |\n")
         f.write("|---------|------|-------|---------|------------|\n")
         f.write("| Iris | iris.csv | 150 | 3 | 4 |\n")
@@ -142,20 +142,20 @@ def create_summary():
         f.write("| Digits | digits.csv | 1797 | 10 | 64 |\n")
         f.write("| Titanic | titanic.csv | 891 | 2 | 7 |\n")
         f.write("| Synthetic Blobs | synthetic_blobs.csv | 500 | 3 | 5 |\n")
-        f.write("\n\n## 🚀 Использование\n\n")
+        f.write("\n\n## Использование\n\n")
         f.write("```bash\npython app.py\n```\n\n")
         f.write("Программа автоматически найдёт все CSV файлы в этой папке!\n")
-        f.write("\n\n## ⚠️ Изменения\n\n")
+        f.write("\n\n## Изменения\n\n")
         f.write("- breast_cancer.csv - удалён\n")
         f.write("- diabetes.csv - удалён\n")
         f.write("- titanic.csv - колонка 'sex' переименована в 'gender'\n")
 
-    print(f"\n✅ Summary: {summary_path}")
+    print(f"\nSummary: {summary_path}")
 
 
 def main():
     print("\n" + "="*70)
-    print("📥 ЗАГРУЗКА ВСЕХ ТЕСТОВЫХ ДАТАСЕТОВ")
+    print("ЗАГРУЗКА ВСЕХ ТЕСТОВЫХ ДАТАСЕТОВ")
     print("="*70)
     print(f"\n📂 Путь сохранения: {TABULAR_DIR.absolute()}")
 
@@ -180,10 +180,10 @@ def main():
     print("\n" + "="*70)
     print("✅ ВСЕ ДАТАСЕТЫ ЗАГРУЖЕНЫ!")
     print("="*70)
-    print(f"\n📂 Расположение: {TABULAR_DIR.absolute()}")
-    print("\n💡 Запуск программы:")
+    print(f"\nРасположение: {TABULAR_DIR.absolute()}")
+    print("\nЗапуск программы:")
     print("   python app.py")
-    print("\n📋 Доступные датасеты:")
+    print("\nДоступные датасеты:")
     print("   1. iris.csv (150 строк, 3 класса)")
     print("   2. wine.csv (178 строк, 3 класса)")
     print("   3. digits.csv (1797 строк, 10 классов)")

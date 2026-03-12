@@ -9,7 +9,7 @@ import yaml
 def download_oxford_flowers():
     """Загрузка Oxford 102 Flowers"""
     print("=" * 70)
-    print("🌺 ЗАГРУЗКА OXFORD 102 FLOWER DATASET")
+    print("ЗАГРУЗКА OXFORD 102 FLOWER DATASET")
     print("=" * 70)
 
     download_dir = Path("data/images/oxford_flowers_raw")
@@ -21,7 +21,7 @@ def download_oxford_flowers():
 
     images_path = download_dir / "102flowers.tgz"
     if not images_path.exists():
-        print("\n📥 Загрузка изображений (~350 MB)...")
+        print("\nЗагрузка изображений (~350 MB)...")
         print("   Это займет 2-10 минут в зависимости от скорости")
 
         def download_with_progress(url, filepath):
@@ -50,7 +50,7 @@ def download_oxford_flowers():
 
     extract_dir = download_dir / "images"
     if not extract_dir.exists():
-        print("\n📦 Распаковка...")
+        print("\nРаспаковка...")
         with tarfile.open(images_path, 'r:gz') as tar:
             tar.extractall(extract_dir)
         print("   ✅ Распаковано")
@@ -59,7 +59,7 @@ def download_oxford_flowers():
 
     labels_path = download_dir / "imagelabels.mat"
     if not labels_path.exists():
-        print("\n📥 Загрузка меток...")
+        print("\nЗагрузка меток...")
         urllib.request.urlretrieve(labels_url, labels_path)
         print("   ✅ Загружено")
     else:
@@ -67,7 +67,7 @@ def download_oxford_flowers():
 
     setid_path = download_dir / "setid.mat"
     if not setid_path.exists():
-        print("\n📥 Загрузка split...")
+        print("\nЗагрузка split...")
         urllib.request.urlretrieve(setid_url, setid_path)
         print("   ✅ Загружено")
     else:
@@ -77,8 +77,8 @@ def download_oxford_flowers():
     print("✅ OXFORD 102 FLOWERS ЗАГРУЖЕН")
     print("=" * 70)
     print(f"\n📂 Расположение: {download_dir}")
-    print(f"📊 102 класса, ~8000 изображений")
-    print(f"\n💡 Для подготовки к YOLO:")
+    print(f"102 класса, ~8000 изображений")
+    print(f"\nДля подготовки к YOLO:")
     print(f"   python scripts/prepare_oxford_for_yolo.py")
 
     return download_dir

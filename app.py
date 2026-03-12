@@ -19,7 +19,7 @@ import seaborn as sns
 
 
 def create_quick_test_dataset():
-    print("\n📊 Создание тестового датасета Iris...")
+    print("\nСоздание тестового датасета Iris...")
 
     tabular_dir = Path("data/tabular")
     tabular_dir.mkdir(parents=True, exist_ok=True)
@@ -34,7 +34,7 @@ def create_quick_test_dataset():
     df.to_csv(filepath, index=False, encoding='utf-8')
 
     print(f"   ✅ Создан: {filepath}")
-    print(f"   📏 {len(df)} строк, {len(df.columns)} колонок")
+    print(f"   {len(df)} строк, {len(df.columns)} колонок")
 
     return filepath
 
@@ -59,13 +59,13 @@ class AdaptiveMLApp:
     def print_header(self, title: str):
         self.clear_screen()
         print("="*70)
-        print(f"🌸 {title.upper()}")
+        print(f"{title.upper()}")
         print("="*70)
         print()
 
     def print_step(self, step_num: int, text: str):
         print(f"\n{'='*70}")
-        print(f"📍 ШАГ {step_num}: {text}")
+        print(f"ШАГ {step_num}: {text}")
         print("="*70)
 
     def print_success(self, text: str):
@@ -99,7 +99,7 @@ class AdaptiveMLApp:
             except ValueError:
                 print("❌ Введите корректное число")
             except KeyboardInterrupt:
-                print("\n\n👋 Завершено")
+                print("\n\n👋 Программа завершена")
                 sys.exit(0)
 
     def setup_output_directory(self):
@@ -149,7 +149,7 @@ class AdaptiveMLApp:
 
     def load_iris_builtin(self):
         """Загрузка встроенного Iris"""
-        print("\n📥 Загрузка Iris Dataset...")
+        print("\nЗагрузка Iris Dataset...")
 
         from sklearn.datasets import load_iris
         iris = load_iris()
@@ -165,7 +165,7 @@ class AdaptiveMLApp:
         return True
 
     def load_csv_file(self, filepath: Path):
-        print(f"\n📥 Загрузка {filepath.name}...")
+        print(f"\nЗагрузка {filepath.name}...")
 
         try:
             self.data = pd.read_csv(filepath)
@@ -178,11 +178,11 @@ class AdaptiveMLApp:
             for col in target_candidates:
                 if col in self.data.columns:
                     self.target_column = col
-                    print(f"💡 Найдена target колонка: {col}")
+                    print(f"Найдена target колонка: {col}")
                     break
 
             if self.target_column is None:
-                print("\n📊 Колонки:")
+                print("\nКолонки:")
                 for i, col in enumerate(self.data.columns, 1):
                     print(f"   {i}. {col}")
 
@@ -254,7 +254,7 @@ class AdaptiveMLApp:
             print(f"\n✅ Выбрана: {self.target_column}")
         else:
             columns = list(self.data.columns)
-            print("\n📊 Колонки:")
+            print("\nКолонки:")
 
             for i, col in enumerate(columns, 1):
                 sample = self.data[col].iloc[0] if len(self.data) > 0 else "N/A"
@@ -284,7 +284,7 @@ class AdaptiveMLApp:
 
         self.X = self.data[self.feature_columns].values
 
-        print(f"\n📊 Признаков (numeric): {len(self.feature_columns)}")
+        print(f"\nПризнаков (numeric): {len(self.feature_columns)}")
         print(f"   Колонки: {', '.join(self.feature_columns)}")
         print(f"   Образцов: {self.X.shape[0]}")
         print(f"   Классов: {len(np.unique(self.y))}")
@@ -331,7 +331,7 @@ class AdaptiveMLApp:
             self.X, self.y, test_size=0.2, random_state=42, stratify=self.y
         )
 
-        print(f"\n📊 Train: {len(X_train)}, Test: {len(X_test)}")
+        print(f"\nTrain: {len(X_train)}, Test: {len(X_test)}")
 
         self.best_model = self.selector.profile_and_select(
             self.X, self.y,
@@ -355,11 +355,11 @@ class AdaptiveMLApp:
         accuracy = accuracy_score(y_test, y_pred)
 
         print("\n" + "="*70)
-        print("📈 ИТОГИ")
+        print("ИТОГИ")
         print("="*70)
-        print(f"\n🏆 Модель: {self.best_model.name}")
-        print(f"📊 Точность: {accuracy:.4f} ({accuracy*100:.2f}%)")
-        print(f"\n📋 Отчет:")
+        print(f"\n🥇 Лучшая модель: {self.best_model.name}")
+        print(f"Точность: {accuracy:.4f} ({accuracy*100:.2f}%)")
+        print(f"\nОтчет:")
         print(classification_report(y_test, y_pred))
 
         try:
@@ -440,9 +440,8 @@ class AdaptiveMLApp:
         print("✅ Успешно!")
         print(f"\n📂 {self.output_dir}")
         print(f"🏆 {self.best_model.name}")
-        print(f"📊 Accuracy: {self.results['accuracy']*100:.2f}%")
-        print(f"\n💡 outputs/latest/")
-        print("\n🎉 Спасибо!")
+        print(f"Accuracy: {self.results['accuracy']*100:.2f}%")
+        print(f"\noutputs/latest/")
 
     def run(self):
         try:
@@ -455,7 +454,7 @@ class AdaptiveMLApp:
             print("   3. ИЛИ используйте встроенный Iris")
             print("   DEVELOP TRICK: try scripts/download_all_datasets.py to get more data for tests")
             print()
-            input("👉 Enter для начала...")
+            input(" Нажмите Enter для начала...")
 
             self.setup_output_directory()
 
