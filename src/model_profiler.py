@@ -1,6 +1,7 @@
 import numpy as np
 import pandas as pd
 import matplotlib
+
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import seaborn as sns
@@ -11,6 +12,7 @@ import os
 from dataclasses import dataclass, asdict
 from datetime import datetime
 import warnings
+
 warnings.filterwarnings('ignore')
 
 
@@ -67,7 +69,10 @@ class DataProfiler:
         self.profile = None
 
     def profile_tabular_data(self, X: np.ndarray, y: Optional[np.ndarray] = None,
-                            feature_names: Optional[List[str]] = None) -> DatasetProfile:
+                             feature_names: Optional[List[str]] = None) -> DatasetProfile:
+        if X.dtype == object or X.dtype.kind == 'U':
+            X = X.astype(np.float64)
+
         if feature_names is None:
             feature_names = [f"feature_{i}" for i in range(X.shape[1])]
 
@@ -77,15 +82,29 @@ class DataProfiler:
         feature_profiles = []
         for i in range(n_features):
             feature = X[:, i]
+
+            std_val = float(np.std(feature))
+            mean_val = float(np.mean(feature))
+
+            try:
+                skewness_val = float(stats.skew(feature))
+            except:
+                skewness_val = 0.0
+
+            try:
+                kurtosis_val = float(stats.kurtosis(feature))
+            except:
+                kurtosis_val = 0.0
+
             profile = FeatureProfile(
                 name=feature_names[i],
-                mean=float(np.mean(feature)),
-                std=float(np.std(feature)),
+                mean=mean_val,
+                std=std_val,
                 min=float(np.min(feature)),
                 max=float(np.max(feature)),
                 median=float(np.median(feature)),
-                skewness=float(stats.skew(feature)),
-                kurtosis=float(stats.kurtosis(feature)),
+                skewness=skewness_val,
+                kurtosis=kurtosis_val,
                 missing_values=int(np.sum(np.isnan(feature))),
                 outliers_count=self._count_outliers(feature),
                 correlation_with_target=None
@@ -112,9 +131,12 @@ class DataProfiler:
 
         corr_matrix = None
         if n_features <= 20:
-            corr_matrix = np.corrcoef(X.T)
-            corr_matrix = np.nan_to_num(corr_matrix, nan=0.0)
-            corr_matrix = corr_matrix.tolist()
+            try:
+                corr_matrix = np.corrcoef(X.T)
+                corr_matrix = np.nan_to_num(corr_matrix, nan=0.0)
+                corr_matrix = corr_matrix.tolist()
+            except:
+                corr_matrix = None
 
         complexity = self._assess_complexity(X, y, n_samples, n_features)
         recommended_models = self._recommend_models(complexity, class_balance_ratio)
@@ -142,12 +164,14 @@ class DataProfiler:
         Q1 = np.percentile(feature, 25)
         Q3 = np.percentile(feature, 75)
         IQR = Q3 - Q1
+        if IQR == 0:
+            return 0
         lower_bound = Q1 - 1.5 * IQR
         upper_bound = Q3 + 1.5 * IQR
         return int(np.sum((feature < lower_bound) | (feature > upper_bound)))
 
     def _assess_complexity(self, X: np.ndarray, y: Optional[np.ndarray],
-                          n_samples: int, n_features: int) -> str:
+                           n_samples: int, n_features: int) -> str:
         ratio = n_samples / n_features if n_features > 0 else 0
         if ratio < 50:
             return "simple"
@@ -171,10 +195,15 @@ class DataProfiler:
         return list(set(recommendations))
 
     def _detect_preprocessing_needs(self, X: np.ndarray,
-                                   feature_profiles: List[FeatureProfile]) -> List[str]:
+                                    feature_profiles: List[FeatureProfile]) -> List[str]:
         needs = []
-        stds = [fp.std for fp in feature_profiles]
-        if max(stds) / min(stds) > 10:
+
+        stds = [fp.std for fp in feature_profiles if fp.std > 0]
+
+        if len(stds) > 0:
+            if max(stds) / min(stds) > 10:
+                needs.append("feature_scaling")
+        else:
             needs.append("feature_scaling")
 
         skewness_values = [abs(fp.skewness) for fp in feature_profiles]
@@ -198,7 +227,7 @@ class DataProfiler:
         fig.suptitle(f'Профиль датасета: {self.dataset_name}', fontsize=16, fontweight='bold')
 
         axes[0, 0].hist([fp.mean for fp in self.profile.feature_profiles],
-                       bins=20, color='steelblue', alpha=0.7)
+                        bins=20, color='steelblue', alpha=0.7)
         axes[0, 0].set_title('Распределение средних значений признаков')
         axes[0, 0].set_xlabel('Среднее')
         axes[0, 0].set_ylabel('Частота')
@@ -244,9 +273,9 @@ class DataProfiler:
         if self.profile is None:
             raise ValueError("Сначала создайте профиль")
 
-        print("\n" + "="*70)
+        print("\n" + "=" * 70)
         print(f"📊 ПРОФИЛЬ ДАТАСЕТА: {self.dataset_name.upper()}")
-        print("="*70)
+        print("=" * 70)
 
         print(f"\n📐 РАЗМЕРЫ:")
         print(f"   • Образцов: {self.profile.n_samples:,}")
@@ -272,11 +301,11 @@ class DataProfiler:
         for need in self.profile.preprocessing_needs:
             print(f"   • {need.replace('_', ' ').title()}")
 
-        print("\n" + "="*70)
+        print("\n" + "=" * 70)
 
 
 def profile_from_csv(filepath: str, target_column: Optional[str] = None,
-                    dataset_name: Optional[str] = None) -> DatasetProfile:
+                     dataset_name: Optional[str] = None) -> DatasetProfile:
     if dataset_name is None:
         dataset_name = os.path.basename(filepath)
 
@@ -297,6 +326,7 @@ def profile_from_csv(filepath: str, target_column: Optional[str] = None,
 
 if __name__ == "__main__":
     from sklearn.datasets import load_iris
+
     iris = load_iris()
     X, y = iris.data, iris.target
 
