@@ -1,0 +1,31 @@
+# Core
+numpy>=1.21.0
+pandas>=1.3.0
+scipy>=1.7.0
+
+# Machine Learning
+scikit-learn>=0.24.0
+joblib>=1.0.0
+
+# Visualization
+matplotlib>=3.4.0
+seaborn>=0.11.0
+
+# YOLO (optional)
+torch>=1.9.0
+torchvision>=0.10.0
+opencv-python>=4.5.0
+ultralytics>=8.0.0
+
+# Utils
+PyYAML>=5.4.0
+Pillow>=8.0.0
+tqdm>=4.62.0
+
+# Testing
+pytest>=6.2.0
+pytest-cov>=3.0.0
+
+# Jupyter (optional)
+jupyter>=1.0.0
+ipykernel>=6.0.0

@@ -1,0 +1,94 @@
+# Конфигурация для Oxford 102 Flowers Dataset (YOLO)
+
+dataset:
+  name: "Oxford 102 Flowers"
+  type: "images"
+  source: "oxford"
+  n_classes: 102
+  image_size:
+    width: 640
+    height: 640
+
+data:
+  path: "data/oxford_flowers"
+  train: "train/images"
+  val: "val/images"
+  test: "test/images"
+  yaml_path: "data/oxford_flowers/data.yaml"
+
+model:
+  architecture: "yolov8"
+  variant: "n"
+  pretrained: true
+  weights: "yolov8n.pt"
+
+training:
+  epochs: 100
+  batch_size: 16
+  image_size: 640
+  device: "0"
+  workers: 8
+  optimizer: "SGD"
+  lr0: 0.01
+  lrf: 0.1
+  momentum: 0.937
+  weight_decay: 0.0005
+  warmup_epochs: 3.0
+  warmup_momentum: 0.8
+  box: 7.5
+  cls: 0.5
+  dfl: 1.5
+
+  hsv_h: 0.015
+  hsv_s: 0.7
+  hsv_v: 0.4
+  flipud: 0.0
+  fliplr: 0.5
+  mosaic: 1.0
+  mixup: 0.0
+  copy_paste: 0.0
+
+validation:
+  enabled: true
+  interval: 1
+  save_predictions: true
+  iou_threshold: 0.5
+
+output:
+  project: "models/yolo_flowers"
+  name: "oxford_flowers_experiment"
+  exist_ok: true
+  save_period: 10
+
+  export_formats:
+    - "onnx"
+    - "torchscript"
+
+evaluation:
+  metrics:
+    - "mAP50"
+    - "mAP50-95"
+    - "precision"
+    - "recall"
+  confusion_matrix: true
+  plots: true
+
+callbacks:
+  early_stopping:
+    enabled: true
+    patience: 20
+    min_delta: 0.001
+
+  model_checkpoint:
+    enabled: true
+    save_best_only: true
+    monitor: "mAP50"
+
+  tensorboard:
+    enabled: true
+    log_dir: "logs/tensorboard"
+
+  wandb:
+    enabled: false
+    project: "adaptive-ml-yolo"
+    entity: null
