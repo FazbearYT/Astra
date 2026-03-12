@@ -4,8 +4,8 @@
 
 ```bash
 # 1. Клонирование репозитория
-git clone https://github.com/FazbearYT/Astra/tree/Updated_UI
-cd adaptive_ml_system
+git clone https://github.com/FazbearYT/Astra
+cd Astra
 
 # 2. Установка зависимостей
 pip install -r requirements.txt
