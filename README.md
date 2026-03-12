@@ -4,7 +4,7 @@
 
 ```bash
 # 1. Клонирование репозитория
-git clone <repository_url>
+git clone https://github.com/FazbearYT/Astra/tree/Updated_UI
 cd adaptive_ml_system
 
 # 2. Установка зависимостей
