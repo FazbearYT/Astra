@@ -12,18 +12,13 @@ from .model_profiler import DataProfiler, DatasetProfile, FeatureProfile, profil
 from .model_selector import AdaptiveModelSelector, SpecializedModel
 
 __all__ = [
-    # Version info
     "__version__",
     "__author__",
     "__email__",
-
-    # Model Profiler
     "DataProfiler",
     "DatasetProfile",
     "FeatureProfile",
     "profile_from_csv",
-
-    # Model Selector
     "AdaptiveModelSelector",
     "SpecializedModel",
 ]
@@ -39,7 +34,3 @@ def info():
     print(f"Adaptive ML System v{__version__}")
     print(f"Author: {__author__}")
     print(f"Email: {__email__}")
-    print("\nAvailable modules:")
-    print("  - DataProfiler: Профилирование данных")
-    print("  - AdaptiveModelSelector: Адаптивный выбор моделей")
-    print("  - SpecializedModel: Обёртка для специализированных моделей")
