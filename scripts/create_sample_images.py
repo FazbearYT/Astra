@@ -1,16 +1,3 @@
-"""
-Создание простых тестовых изображений цветов
-==============================================
-
-Запуск:
-    python scripts/create_sample_images.py
-
-Создаст:
-    data/images/sample_flowers/
-    ├── 0_rose/ (10 изображений)
-    └── 1_tulip/ (10 изображений)
-"""
-
 from pathlib import Path
 from PIL import Image, ImageDraw
 import numpy as np
@@ -28,12 +15,10 @@ def create_flower_image(flower_type: int, img_id: int) -> Image.Image:
     Returns:
         PIL.Image объект
     """
-    # Создание белого фона
     img = Image.new('RGB', (200, 200), color='white')
     draw = ImageDraw.Draw(img)
 
-    if flower_type == 0:  # Роза - красная/розовая
-        # Случайные оттенки красного
+    if flower_type == 0:
         center_color = (
             255,
             random.randint(50, 120),
@@ -45,7 +30,7 @@ def create_flower_image(flower_type: int, img_id: int) -> Image.Image:
             random.randint(120, 200)
         )
         stem_color = (random.randint(20, 60), random.randint(100, 150), random.randint(20, 60))
-    else:  # Тюльпан - желтый/оранжевый
+    else:
         center_color = (
             random.randint(255, 255),
             random.randint(140, 180),
@@ -58,11 +43,9 @@ def create_flower_image(flower_type: int, img_id: int) -> Image.Image:
         )
         stem_color = (random.randint(20, 60), random.randint(100, 150), random.randint(20, 60))
 
-    # Рисуем стебель
     stem_x = 100
     draw.rectangle([stem_x - 5, 120, stem_x + 5, 190], fill=stem_color)
 
-    # Рисуем листья
     draw.polygon([
         (stem_x, 140),
         (stem_x + 30, 130),
@@ -75,7 +58,6 @@ def create_flower_image(flower_type: int, img_id: int) -> Image.Image:
         (stem_x, 170)
     ], fill=stem_color)
 
-    # Рисуем лепестки (круги вокруг центра)
     center_x, center_y = 100, 100
     num_petals = 5 if flower_type == 0 else 6
 
@@ -95,7 +77,6 @@ def create_flower_image(flower_type: int, img_id: int) -> Image.Image:
             center_y + offset_y + petal_size
         ], fill=petal_color)
 
-    # Центр цветка
     center_size = 20 if flower_type == 0 else 18
     draw.ellipse([
         center_x - center_size,
@@ -104,9 +85,7 @@ def create_flower_image(flower_type: int, img_id: int) -> Image.Image:
         center_y + center_size
     ], fill=center_color)
 
-    # Добавляем немного случайного шума для разнообразия
-    if flower_type == 1:  # Для тюльпанов добавляем вариацию формы
-        # Дополнительные лепестки
+    if flower_type == 1:
         for j in range(3):
             angle = (j / 3) * 2 * np.pi + 0.3
             offset_x = int(25 * np.cos(angle))
@@ -122,15 +101,12 @@ def create_flower_image(flower_type: int, img_id: int) -> Image.Image:
 
 
 def create_sample_flower_datasets():
-    """Создание датасета с изображениями цветов"""
     print("=" * 70)
     print(" СОЗДАНИЕ ТЕСТОВОГО ДАТАСЕТА ИЗОБРАЖЕНИЙ")
     print("=" * 70)
 
-    # Директория для датасета
     dataset_dir = Path("data/images/sample_flowers")
 
-    # Классы цветов
     classes = {
         0: 'rose',
         1: 'tulip'
@@ -147,20 +123,17 @@ def create_sample_flower_datasets():
         print(f"\n   Класс {class_id}: {class_name}")
 
         for i in range(num_samples_per_class):
-            # Создание изображения
             img = create_flower_image(class_id, i)
 
-            # Сохранение
             img_path = class_dir / f"{class_name}_{i + 1:03d}.png"
             img.save(img_path)
 
-            if i < 3:  # Показать первые 3
+            if i < 3:
                 print(f"      ✓ {img_path.name}")
 
         if num_samples_per_class > 3:
             print(f"      ... и еще {num_samples_per_class - 3} изображений")
 
-    # Создание README
     readme_path = dataset_dir / "README.txt"
     with open(readme_path, 'w', encoding='utf-8') as f:
         f.write("Тестовый датасет изображений цветов\n")
@@ -184,7 +157,6 @@ def create_sample_flower_datasets():
 
 
 def create_advanced_sample_images():
-    """Создание более сложных тестовых изображений"""
     print("\n" + "=" * 70)
     print("🎨 СОЗДАНИЕ РАСШИРЕННОГО ДАТАСЕТА")
     print("=" * 70)
@@ -205,14 +177,12 @@ def create_advanced_sample_images():
         print(f"\n   Класс {class_id}: {class_name} ({num_samples} изображений)")
 
         for i in range(num_samples):
-            img = create_flower_image(class_id % 2, i)  # Используем базовую функцию
+            img = create_flower_image(class_id % 2, i)
 
-            # Для ромашек (class_id=2) создаем белый цветок
             if class_id == 2:
                 img = Image.new('RGB', (200, 200), color='skyblue')
                 draw = ImageDraw.Draw(img)
 
-                # Белые лепестки
                 for j in range(8):
                     angle = (j / 8) * 2 * np.pi
                     offset_x = int(40 * np.cos(angle))
@@ -222,7 +192,6 @@ def create_advanced_sample_images():
                         100 + offset_x + 20, 100 + offset_y + 20
                     ], fill='white')
 
-                # Желтый центр
                 draw.ellipse([85, 85, 115, 115], fill='yellow')
 
             img_path = class_dir / f"{class_name}_{i + 1:03d}.png"
@@ -232,14 +201,11 @@ def create_advanced_sample_images():
 
 
 def main():
-    """Основная функция"""
     print("\n🌸 ГЕНЕРАТОР ТЕСТОВЫХ ИЗОБРАЖЕНИЙ ЦВЕТОВ")
     print("=" * 70)
 
-    # Базовый датасет
     create_sample_flower_datasets()
 
-    # Спрашиваем про расширенный
     print("\n" + "=" * 70)
     choice = input("Создать расширенный датасет (3 класса)? [y/N]: ").strip().lower()
 

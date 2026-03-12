@@ -1,7 +1,3 @@
-"""
-🌸 Adaptive ML System - Исправленная версия
-"""
-
 import sys
 import os
 from pathlib import Path
@@ -23,7 +19,6 @@ import seaborn as sns
 
 
 def create_quick_test_dataset():
-    """Быстрое создание тестового датасета Iris"""
     print("\n📊 Создание тестового датасета Iris...")
 
     tabular_dir = Path("data/tabular")
@@ -170,7 +165,6 @@ class AdaptiveMLApp:
         return True
 
     def load_csv_file(self, filepath: Path):
-        """Загрузка CSV"""
         print(f"\n📥 Загрузка {filepath.name}...")
 
         try:
@@ -202,7 +196,6 @@ class AdaptiveMLApp:
             return False
 
     def load_data(self):
-        """Загрузка данных с автообнаружением ИЛИ созданием"""
         self.print_step(1, "Загрузка данных")
 
         available = self.auto_detect_datasets()
@@ -255,7 +248,6 @@ class AdaptiveMLApp:
                 return False
 
     def select_target_column(self):
-        """Выбор target + фильтрация numeric колонок"""
         self.print_step(2, "Целевая переменная")
 
         if self.target_column and self.target_column in self.data.columns:
@@ -405,7 +397,6 @@ class AdaptiveMLApp:
         return True
 
     def predict_new_data(self):
-        """Предсказание"""
         self.print_step(6, "Предсказание")
 
         choice = self.get_user_choice("\nДействие:", [
@@ -445,7 +436,6 @@ class AdaptiveMLApp:
         return True
 
     def show_summary(self):
-        """Итоги"""
         self.print_header("Готово!")
         print("✅ Успешно!")
         print(f"\n📂 {self.output_dir}")

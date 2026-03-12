@@ -1,18 +1,3 @@
-"""
-Загрузка всех тестовых датасетов
-=================================
-
-Запуск:
-    python scripts/download_all_datasets.py
-
-Создаст в data/tabular/ (в корне проекта):
-    - iris.csv
-    - wine.csv
-    - digits.csv
-    - titanic.csv (с колонкой gender вместо sex)
-    - synthetic_blobs.csv
-"""
-
 import os
 import sys
 from pathlib import Path
@@ -23,20 +8,16 @@ from sklearn.datasets import (
     fetch_openml, make_classification, make_blobs
 )
 
-# 🔧 ИСПРАВЛЕНИЕ: Получаем корень проекта (на уровень выше scripts/)
 PROJECT_ROOT = Path(__file__).parent.parent
 TABULAR_DIR = PROJECT_ROOT / "data" / "tabular"
 
 
 def save_dataset(df: pd.DataFrame, filename: str, description: str):
-    """Сохранение датасета с README"""
-    # 🔧 ИСПРАВЛЕНИЕ: Используем TABULAR_DIR вместо относительного пути
     TABULAR_DIR.mkdir(parents=True, exist_ok=True)
 
     filepath = TABULAR_DIR / filename
     df.to_csv(filepath, index=False, encoding='utf-8')
 
-    # README
     readme_path = TABULAR_DIR / f"{filename.replace('.csv', '')}_info.txt"
     with open(readme_path, 'w', encoding='utf-8') as f:
         f.write(f"Dataset: {filename.replace('.csv', '')}\n")
@@ -54,7 +35,6 @@ def save_dataset(df: pd.DataFrame, filename: str, description: str):
 
 
 def download_iris():
-    """Iris Flowers"""
     print("\n1️⃣  Iris Dataset...")
     iris = load_iris()
     df = pd.DataFrame(iris.data, columns=iris.feature_names)
@@ -69,7 +49,6 @@ def download_iris():
 
 
 def download_wine():
-    """Wine Recognition"""
     print("\n2️⃣  Wine Dataset...")
     wine = load_wine()
     df = pd.DataFrame(wine.data, columns=wine.feature_names)
@@ -84,7 +63,6 @@ def download_wine():
 
 
 def download_digits():
-    """Optical Recognition of Handwritten Digits"""
     print("\n3️⃣  Digits Dataset...")
     digits = load_digits()
 
@@ -99,19 +77,15 @@ def download_digits():
 
 
 def download_titanic():
-    """Titanic Survival"""
     print("\n4️⃣  Titanic Dataset...")
 
     try:
         titanic = fetch_openml(name='titanic', version=1, as_frame=True)
         df = titanic.frame
 
-        # Предобработка
-        df = df[['pclass', 'sex', 'age', 'sibsp', 'parch', 'fare', 'embarked', 'survived']]
+        df = df[['pclass', 'gender', 'age', 'sibsp', 'parch', 'fare', 'embarked', 'survived']]
         df = df.dropna()
 
-        # 🔧 ИСПРАВЛЕНИЕ: sex → gender
-        df = df.rename(columns={'sex': 'gender'})
         df['gender'] = df['gender'].map({'male': 0, 'female': 1})
         df['embarked'] = df['embarked'].map({'S': 0, 'C': 1, 'Q': 2}).fillna(0)
 
@@ -119,7 +93,6 @@ def download_titanic():
         df = df.drop(columns=['survived'])
 
     except:
-        # Синтетическая альтернатива
         np.random.seed(42)
         n = 891
         df = pd.DataFrame({
@@ -141,7 +114,6 @@ def download_titanic():
 
 
 def download_synthetic_blobs():
-    """Synthetic Classification Blobs"""
     print("\n5️⃣  Synthetic Blobs Dataset...")
 
     np.random.seed(42)
@@ -160,7 +132,6 @@ def download_synthetic_blobs():
 
 
 def create_summary():
-    """Создание общего README"""
     summary_path = TABULAR_DIR / "DATASETS_SUMMARY.md"
     with open(summary_path, 'w', encoding='utf-8') as f:
         f.write("# 📊 Тестовые датасеты\n\n")

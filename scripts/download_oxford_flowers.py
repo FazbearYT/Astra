@@ -1,16 +1,3 @@
-"""
-Загрузка Oxford 102 Flower Dataset
-===================================
-
-Запуск:
-    python scripts/download_oxford_flowers.py
-
-Скачает:
-    - 102flowers.tgz (изображения)
-    - imagelabels.mat (метки)
-    - setid.mat (разделение на train/val/test)
-"""
-
 import os
 import tarfile
 import urllib.request
@@ -28,12 +15,10 @@ def download_oxford_flowers():
     download_dir = Path("data/images/oxford_flowers_raw")
     download_dir.mkdir(parents=True, exist_ok=True)
 
-    # URL
     images_url = "http://www.robots.ox.ac.uk/~vgg/data/flowers/102/102flowers.tgz"
     labels_url = "http://www.robots.ox.ac.uk/~vgg/data/flowers/102/imagelabels.mat"
     setid_url = "http://www.robots.ox.ac.uk/~vgg/data/flowers/102/setid.mat"
 
-    # Загрузка изображений
     images_path = download_dir / "102flowers.tgz"
     if not images_path.exists():
         print("\n📥 Загрузка изображений (~350 MB)...")
@@ -63,7 +48,6 @@ def download_oxford_flowers():
     else:
         print(f"\n✅ Изображения уже загружены")
 
-    # Распаковка
     extract_dir = download_dir / "images"
     if not extract_dir.exists():
         print("\n📦 Распаковка...")
@@ -73,7 +57,6 @@ def download_oxford_flowers():
     else:
         print(f"✅ Уже распаковано")
 
-    # Загрузка меток
     labels_path = download_dir / "imagelabels.mat"
     if not labels_path.exists():
         print("\n📥 Загрузка меток...")
@@ -82,7 +65,6 @@ def download_oxford_flowers():
     else:
         print(f"✅ Метки уже загружены")
 
-    # Загрузка split
     setid_path = download_dir / "setid.mat"
     if not setid_path.exists():
         print("\n📥 Загрузка split...")

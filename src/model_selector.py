@@ -1,6 +1,3 @@
-"""
-Модуль адаптивного выбора и управления ML моделями
-"""
 
 import numpy as np
 from typing import Dict, List, Any, Optional
@@ -23,7 +20,6 @@ warnings.filterwarnings('ignore')
 
 
 class SpecializedModel:
-    """Обертка для специализированной ML модели"""
 
     def __init__(self, name: str, model: BaseEstimator,
                  profile_requirements: Dict[str, Any],
@@ -152,7 +148,6 @@ class SpecializedModel:
 
 
 class AdaptiveModelSelector:
-    """Адаптивный селектор моделей"""
 
     def __init__(self):
         self.models: List[SpecializedModel] = []

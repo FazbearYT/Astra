@@ -1,7 +1,3 @@
-"""
-Модуль профилирования данных для адаптивной системы выбора моделей
-"""
-
 import numpy as np
 import pandas as pd
 import matplotlib
@@ -20,7 +16,6 @@ warnings.filterwarnings('ignore')
 
 @dataclass
 class FeatureProfile:
-    """Профиль одного признака"""
     name: str
     mean: float
     std: float
@@ -36,7 +31,6 @@ class FeatureProfile:
 
 @dataclass
 class DatasetProfile:
-    """Полный профиль датасета"""
     n_samples: int
     n_features: int
     n_classes: Optional[int]
@@ -67,7 +61,6 @@ class DatasetProfile:
 
 
 class DataProfiler:
-    """Профилировщик данных для ML моделей"""
 
     def __init__(self, dataset_name: str = "unknown"):
         self.dataset_name = dataset_name
