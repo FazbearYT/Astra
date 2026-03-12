@@ -1,5 +1,22 @@
 # Adaptive ML System
 
+## 🚀 Быстрый старт
+
+```bash
+# 1. Клонирование репозитория
+git clone <repository_url>
+cd adaptive_ml_system
+
+# 2. Установка зависимостей
+pip install -r requirements.txt
+
+# 3. Запуск программы
+python app.py
+
+# 4. Выбрать опцию "Создать тестовый датасет" или "Iris Dataset"
+# 5. Готово! Результаты в outputs/run_001/
+```
+
 **Автоматическая система выбора и адаптации ML-моделей под ваши данные**
 
 ## 📋 Оглавление
@@ -52,27 +69,6 @@
 - **Neural Network (MLP)** — универсальная модель
 - **Logistic Regression** — быстрая базовая модель
 - **K-Nearest Neighbors** — простая интерпретируемая модель
-
----
-
-## 🚀 Быстрый старт
-
-```bash
-# 1. Клонирование репозитория
-git clone <repository_url>
-cd adaptive_ml_system
-
-# 2. Установка зависимостей
-pip install -r requirements.txt
-
-# 3. Запуск программы
-python app.py
-
-# 4. Выбрать опцию "Создать тестовый датасет" или "Iris Dataset"
-# 5. Готово! Результаты в outputs/run_001/
-
----
-```
 
 ---
 
