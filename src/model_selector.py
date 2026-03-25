@@ -358,24 +358,18 @@ class AdaptiveModelSelector:
 
     def profile_and_select(self, X: np.ndarray, y: np.ndarray,
                            data_profile: Optional[Dict] = None,
-                           cv_folds: int = 5) -> SpecializedModel:
+                           cv_folds: int = 5,
+                           use_cv_in_scoring: bool = False) -> SpecializedModel:
         """
-        Профилирование данных и выбор лучшей модели
+        Выбор лучшей модели с акцентом на Accuracy и F1-Score
 
         Args:
-            X: данные
-            y: метки
-            data_profile: готовый профиль (опционально)
-            cv_folds: число фолдов для кросс-валидации
-
-        Returns:
-            лучшая модель
+            use_cv_in_scoring: Если False - CV только для информации, не влияет на выбор
         """
         print("\n" + "=" * 70)
         print("🔄 АДАПТИВНЫЙ ВЫБОР МОДЕЛИ")
         print("=" * 70)
 
-        # Если профиль не предоставлен, создаем базовый
         if data_profile is None:
             data_profile = {
                 'n_samples': X.shape[0],
@@ -395,7 +389,7 @@ class AdaptiveModelSelector:
         print(f"   • Train: {X_train.shape[0]} образцов")
         print(f"   • Test: {X_test.shape[0]} образцов")
 
-        # Оценка соответствия моделей профилю
+        # 🔧 ИЗМЕНЕНИЕ 1: Оценка соответствия моделей профилю
         print("\n📋 Оценка соответствия моделей профилю данных:")
         model_scores = []
 
@@ -404,17 +398,15 @@ class AdaptiveModelSelector:
             model_scores.append((model, profile_score))
             print(f"   • {model.name}: {profile_score:.3f}")
 
-        # Сортировка по соответствию профилю
         model_scores.sort(key=lambda x: x[1], reverse=True)
 
-        # Тестирование топ-3 моделей
-        print("\n🤖 Тестирование топ-3 моделей:")
+        # 🔧 ИЗМЕНЕНИЕ 2: Тестирование ВСЕХ моделей (не только топ-3)
+        print("\n🤖 Тестирование ВСЕХ моделей:")
         print("=" * 70)
 
-        best_accuracy = 0.0
-        best_model = None
+        results_table = []
 
-        for model, profile_score in model_scores[:3]:
+        for model, profile_score in model_scores:
             print(f"\n🔬 Тестирование: {model.name}")
             print(f"   Соответствие профилю: {profile_score:.3f}")
 
@@ -422,29 +414,45 @@ class AdaptiveModelSelector:
                 # Обучение
                 model.fit(X_train, y_train)
 
-                # Оценка
+                # Оценка на тесте
                 metrics = model.evaluate(X_test, y_test)
 
-                # Кросс-валидация
+                # Кросс-валидация (для информации)
                 cv_results = model.cross_validate(X_train, y_train, cv=cv_folds)
 
-                print(f"   Accuracy: {metrics['accuracy']:.4f}")
-                print(f"   F1-Score: {metrics['f1']:.4f}")
-                print(f"   CV Score: {cv_results['cv_mean']:.4f} (+/- {cv_results['cv_std']:.4f})")
-                print(f"   Время обучения: {model.training_time:.3f}s")
+                print(f"   Accuracy:  {metrics['accuracy']:.4f} ⭐")
+                print(f"   F1-Score:  {metrics['f1']:.4f} ⭐")
+                print(f"   Precision: {metrics['precision']:.4f}")
+                print(f"   Recall:    {metrics['recall']:.4f}")
+                print(f"   CV Score:  {cv_results['cv_mean']:.4f} (+/- {cv_results['cv_std']:.4f})")
+                print(f"   Время:     {model.training_time:.3f}s")
 
-                # Итоговый скор (комбинация метрик)
-                final_score = (
-                        metrics['accuracy'] * 0.4 +
-                        metrics['f1'] * 0.3 +
-                        cv_results['cv_mean'] * 0.3
-                )
+                # 🔧 ИЗМЕНЕНИЕ 3: Новый скор (70% Accuracy + 30% F1)
+                if use_cv_in_scoring:
+                    final_score = (
+                            metrics['accuracy'] * 0.5 +  # 50% accuracy
+                            metrics['f1'] * 0.3 +  # 30% f1-score
+                            cv_results['cv_mean'] * 0.2  # 20% кросс-валидация
+                    )
+                else:
+                    final_score = (
+                            metrics['accuracy'] * 0.7 +  # 70% accuracy
+                            metrics['f1'] * 0.3  # 30% f1-score
+                    )
 
                 print(f"   Итоговый скор: {final_score:.4f}")
 
-                if final_score > best_accuracy:
-                    best_accuracy = final_score
-                    best_model = model
+                results_table.append({
+                    'model': model.name,
+                    'profile_score': profile_score,
+                    'accuracy': metrics['accuracy'],
+                    'f1': metrics['f1'],
+                    'precision': metrics['precision'],
+                    'recall': metrics['recall'],
+                    'cv_mean': cv_results['cv_mean'],
+                    'final_score': final_score,
+                    'training_time': model.training_time
+                })
 
                 # Сохранение истории
                 self.selection_history.append({
@@ -457,17 +465,31 @@ class AdaptiveModelSelector:
                 })
 
             except Exception as e:
-                print(f"   ⚠️ Ошибка: {str(e)}")
+                print(f"   ⚠️  Ошибка: {str(e)}")
                 continue
 
-        if best_model is None:
-            raise ValueError("Ни одна модель не прошла тестирование!")
+        # 🔧 ИЗМЕНЕНИЕ 4: Красивая таблица результатов
+        print("\n" + "=" * 70)
+        print("📊 СРАВНЕНИЕ МОДЕЛЕЙ (отсортировано по итоговому скору)")
+        print("=" * 70)
+        print(f"{'Модель':<30} {'Accuracy':<10} {'F1-Score':<10} {'Скор':<10} {'Время (с)':<10}")
+        print("-" * 70)
+
+        for result in sorted(results_table, key=lambda x: x['final_score'], reverse=True):
+            print(
+                f"{result['model']:<30} {result['accuracy']:<10.4f} {result['f1']:<10.4f} {result['final_score']:<10.4f} {result['training_time']:<10.3f}")
+
+        # Выбор лучшей
+        best_result = max(results_table, key=lambda x: x['final_score'])
+        best_model = next(m for m in self.models if m.name == best_result['model'])
 
         self.best_model = best_model
 
         print("\n" + "=" * 70)
         print(f"🏆 ВЫБРАНА МОДЕЛЬ: {best_model.name}")
-        print(f"   Итоговый скор: {best_accuracy:.4f}")
+        print(f"   Accuracy: {best_result['accuracy']:.4f}")
+        print(f"   F1-Score: {best_result['f1']:.4f}")
+        print(f"   Итоговый скор: {best_result['final_score']:.4f}")
         print("=" * 70)
 
         return best_model
