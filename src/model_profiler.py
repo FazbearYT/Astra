@@ -1,5 +1,5 @@
 """
-Модуль профилирования данных для адаптивной системы выбора моделей
+Модуль профилирования данных
 """
 
 import numpy as np
@@ -83,17 +83,17 @@ class DataProfiler:
         for i in range(n_features):
             feature = X[:, i]
 
-            std_val = float(np.std(feature))
+            std_val = float(np.std(feature)) if np.std(feature) != 0 else 1e-10
             mean_val = float(np.mean(feature))
 
             try:
                 skewness_val = float(stats.skew(feature))
-            except:
+            except Exception:
                 skewness_val = 0.0
 
             try:
                 kurtosis_val = float(stats.kurtosis(feature))
-            except:
+            except Exception:
                 kurtosis_val = 0.0
 
             profile = FeatureProfile(
@@ -114,7 +114,7 @@ class DataProfiler:
                 try:
                     corr, _ = stats.pearsonr(feature, y)
                     profile.correlation_with_target = float(corr)
-                except:
+                except Exception:
                     profile.correlation_with_target = None
 
             feature_profiles.append(profile)
@@ -135,7 +135,7 @@ class DataProfiler:
                 corr_matrix = np.corrcoef(X.T)
                 corr_matrix = np.nan_to_num(corr_matrix, nan=0.0)
                 corr_matrix = corr_matrix.tolist()
-            except:
+            except Exception:
                 corr_matrix = None
 
         complexity = self._assess_complexity(n_samples, n_features)
@@ -196,7 +196,7 @@ class DataProfiler:
     def _detect_preprocessing_needs(self, X: np.ndarray,
                                    feature_profiles: List[FeatureProfile]) -> List[str]:
         needs = []
-        stds = [fp.std for fp in feature_profiles if fp.std > 0]
+        stds = [fp.std for fp in feature_profiles if fp.std > 1e-9]
 
         if len(stds) > 0:
             if max(stds) / min(stds) > 10:

@@ -1,6 +1,5 @@
 """
 Модуль адаптивного выбора и управления ML моделями
-С оптимизацией многопоточности
 """
 
 import numpy as np
@@ -23,8 +22,6 @@ from sklearn.pipeline import Pipeline
 import warnings
 warnings.filterwarnings('ignore')
 
-
-# Оптимизация многопоточности
 os.environ['OMP_NUM_THREADS'] = str(os.cpu_count())
 os.environ['OPENBLAS_NUM_THREADS'] = str(os.cpu_count())
 os.environ['MKL_NUM_THREADS'] = str(os.cpu_count())
@@ -178,7 +175,7 @@ class AdaptiveModelSelector:
                     n_estimators=100,
                     max_depth=10,
                     random_state=42,
-                    n_jobs=-1  # Все ядра
+                    n_jobs=-1
                 ),
                 profile_requirements={
                     'data_complexity': 'simple',
@@ -197,7 +194,6 @@ class AdaptiveModelSelector:
                 model=Pipeline([
                     ('scaler', StandardScaler()),
                     ('svc', SVC(kernel='rbf', probability=True, random_state=42))
-                    # SVM не поддерживает n_jobs в старых версиях sklearn
                 ]),
                 profile_requirements={
                     'data_complexity': 'medium',
@@ -216,7 +212,6 @@ class AdaptiveModelSelector:
                     max_depth=5,
                     learning_rate=0.1,
                     random_state=42
-                    # GradientBoosting не поддерживает n_jobs
                 ),
                 profile_requirements={
                     'data_complexity': 'complex',
@@ -255,7 +250,7 @@ class AdaptiveModelSelector:
                     ('lr', LogisticRegression(
                         max_iter=1000,
                         random_state=42,
-                        n_jobs=-1  # Все ядра
+                        n_jobs=-1
                     ))
                 ]),
                 profile_requirements={

@@ -12,11 +12,16 @@ import numpy as np
 from datetime import datetime
 import time
 
+os.environ['OMP_NUM_THREADS'] = str(os.cpu_count())
+os.environ['OPENBLAS_NUM_THREADS'] = str(os.cpu_count())
+os.environ['MKL_NUM_THREADS'] = str(os.cpu_count())
+os.environ['NUMEXPR_NUM_THREADS'] = str(os.cpu_count())
+
 sys.path.insert(0, str(Path(__file__).parent / "src"))
 
 from model_profiler import DataProfiler
 from model_selector import AdaptiveModelSelector
-from pipeline_config import PipelineConfig, get_default_config, interactive_config
+from pipeline_config import PipelineConfig, get_default_config, get_fast_config, get_accurate_config, interactive_config
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
 import matplotlib
@@ -26,15 +31,12 @@ import seaborn as sns
 
 
 class DataManager:
-    """Управление датасетами"""
-
     def __init__(self, data_dir: Path):
         self.data_dir = data_dir
         self.tabular_dir = data_dir / "tabular"
         self.tabular_dir.mkdir(parents=True, exist_ok=True)
 
     def create_iris_dataset(self) -> Path:
-        """Создание тестового Iris"""
         from sklearn.datasets import load_iris
 
         iris = load_iris()
@@ -48,7 +50,6 @@ class DataManager:
         return filepath
 
     def create_wine_dataset(self) -> Path:
-        """Создание Wine dataset"""
         from sklearn.datasets import load_wine
 
         wine = load_wine()
@@ -62,7 +63,6 @@ class DataManager:
         return filepath
 
     def create_digits_dataset(self) -> Path:
-        """Создание Digits dataset"""
         from sklearn.datasets import load_digits
 
         digits = load_digits()
@@ -75,7 +75,6 @@ class DataManager:
         return filepath
 
     def create_titanic_dataset(self) -> Path:
-        """Создание Titanic dataset"""
         np.random.seed(42)
         n = 891
 
@@ -96,7 +95,6 @@ class DataManager:
         return filepath
 
     def create_synthetic_dataset(self) -> Path:
-        """Создание синтетического dataset"""
         from sklearn.datasets import make_blobs
 
         np.random.seed(42)
@@ -113,7 +111,6 @@ class DataManager:
         return filepath
 
     def create_large_dataset(self) -> Path:
-        """Создание большого dataset для тестирования"""
         from sklearn.datasets import make_classification
 
         print("\nГенерация большого датасета (100,000 строк)...")
@@ -138,7 +135,6 @@ class DataManager:
         return filepath
 
     def auto_detect_datasets(self) -> List[Dict]:
-        """Автообнаружение всех CSV в data/tabular/"""
         available = []
 
         if self.tabular_dir.exists():
@@ -157,11 +153,9 @@ class DataManager:
         return available
 
     def load_dataset(self, filepath: Path) -> pd.DataFrame:
-        """Загрузка CSV"""
         return pd.read_csv(filepath)
 
     def create_all_test_datasets(self) -> List[Path]:
-        """Создание всех тестовых датасетов"""
         print("\nСоздание всех тестовых датасетов...")
 
         paths = []
@@ -177,8 +171,6 @@ class DataManager:
 
 
 class AdaptiveMLApp:
-    """Главный класс приложения"""
-
     def __init__(self):
         self.data = None
         self.X = None
@@ -208,12 +200,6 @@ class AdaptiveMLApp:
         print(f"\n{'='*70}")
         print(f"ШАГ {step_num}: {text}")
         print("="*70)
-
-    def print_info(self, text: str):
-        print(f"  [INFO] {text}")
-
-    def print_progress(self, text: str):
-        print(f"  >>> {text}")
 
     def get_user_choice(self, prompt: str, options: list) -> int:
         print(f"\n{prompt}")
@@ -262,44 +248,10 @@ class AdaptiveMLApp:
         return self.output_dir
 
     def initialize_data_manager(self):
-        """Инициализация менеджера данных"""
         data_dir = Path("data")
         self.data_manager = DataManager(data_dir)
 
-    def explain_complexity_calculation(self, n_samples: int, n_features: int):
-        """Объяснение как рассчитывается сложность датасета"""
-        ratio = n_samples / n_features if n_features > 0 else 0
-
-        print("\n" + "="*70)
-        print("КАК ОПРЕДЕЛЯЕТСЯ СЛОЖНОСТЬ ДАТАСЕТА")
-        print("="*70)
-        print(f"\nФормула: отношение образцов к признакам")
-        print(f"  - Образцов: {n_samples}")
-        print(f"  - Признаков: {n_features}")
-        print(f"  - Отношение: {ratio:.1f}")
-        print("\nКритерии:")
-        print("  - Простой: отношение < 50")
-        print("  - Средний: 50 <= отношение < 200")
-        print("  - Сложный: отношение >= 200")
-
-        if ratio < 50:
-            complexity = "ПРОСТОЙ"
-            recommendation = "Подойдут простые модели: Random Forest, SVM, Logistic Regression"
-        elif ratio < 200:
-            complexity = "СРЕДНЕЙ СЛОЖНОСТИ"
-            recommendation = "Рекомендуются: Gradient Boosting, Random Forest, Neural Network"
-        else:
-            complexity = "СЛОЖНЫЙ"
-            recommendation = "Лучше всего: Neural Network, Gradient Boosting"
-
-        print(f"\nВаш датасет: {complexity}")
-        print(f"\nРекомендация: {recommendation}")
-        print("="*70)
-
-        input("\nНажмите Enter для продолжения...")
-
     def show_main_menu(self) -> int:
-        """Главное меню приложения"""
         self.print_header("Adaptive ML System")
 
         print("Автоматический выбор ML моделей")
@@ -307,19 +259,16 @@ class AdaptiveMLApp:
         print("МЕНЮ:")
         print("  1. Запустить анализ данных")
         print("  2. Создать тестовые датасеты")
-        print("  3. Создать большой датасет для теста")
-        print("  4. Просмотреть результаты")
+        print("  3. Просмотреть результаты")
         print("  0. Выход")
 
         return self.get_user_choice("\nВыберите действие", [
             "Запустить анализ данных",
             "Создать тестовые датасеты",
-            "Создать большой датасет для теста",
             "Просмотреть результаты"
         ])
 
     def run_data_analysis(self):
-        """Запуск полного цикла анализа"""
         try:
             self.setup_output_directory()
 
@@ -348,7 +297,6 @@ class AdaptiveMLApp:
             return False
 
     def create_test_datasets_menu(self):
-        """Меню создания тестовых датасетов"""
         self.print_header("Создание тестовых датасетов")
 
         print("\nВыберите датасет для создания:")
@@ -358,6 +306,7 @@ class AdaptiveMLApp:
         print("  4. Titanic (891 строк, 2 класса)")
         print("  5. Synthetic (500 строк, 3 класса)")
         print("  6. Все датасеты сразу")
+        print("  7. Большой датасет (100,000 строк)")
         print("  0. Назад")
 
         choice = self.get_user_choice("\nВаш выбор", [
@@ -366,7 +315,8 @@ class AdaptiveMLApp:
             "Digits",
             "Titanic",
             "Synthetic",
-            "Все датасеты"
+            "Все датасеты",
+            "Большой датасет"
         ])
 
         if choice == 1:
@@ -387,31 +337,13 @@ class AdaptiveMLApp:
         elif choice == 6:
             paths = self.data_manager.create_all_test_datasets()
             print(f"\nСоздано {len(paths)} датасетов")
-
-        input("\nНажмите Enter для продолжения...")
-
-    def create_large_dataset_menu(self):
-        """Меню создания большого датасета"""
-        self.print_header("Большой датасет для тестирования")
-
-        print("\nБудет создан датасет:")
-        print("  - Строк: 100,000")
-        print("  - Признаков: 20")
-        print("  - Классов: 5")
-        print("\nВремя создания: 1-2 минуты")
-        print("Время обучения: 5-15 минут")
-
-        choice = input("\nПродолжить? [y/N]: ").strip().lower()
-
-        if choice == 'y' or choice == 'yes':
+        elif choice == 7:
             path = self.data_manager.create_large_dataset()
             print(f"\nСоздан: {path}")
-            print("\nТеперь выберите этот датасет в главном меню")
 
         input("\nНажмите Enter для продолжения...")
 
     def view_results_menu(self):
-        """Меню просмотра результатов"""
         self.print_header("Просмотр результатов")
 
         outputs_dir = Path("outputs")
@@ -444,7 +376,6 @@ class AdaptiveMLApp:
         input("\nНажмите Enter для продолжения...")
 
     def configure_pipeline(self):
-        """Настройка pipeline"""
         self.print_step(0, "Настройка Pipeline")
 
         print("\nРежимы конфигурации:")
@@ -471,12 +402,10 @@ class AdaptiveMLApp:
             ])
 
             if profile == 1:
-                from pipeline_config import get_fast_config
                 self.pipeline_config = get_fast_config()
             elif profile == 2:
                 self.pipeline_config = get_default_config()
             else:
-                from pipeline_config import get_accurate_config
                 self.pipeline_config = get_accurate_config()
 
             print("\nОсновные параметры:")
@@ -499,7 +428,6 @@ class AdaptiveMLApp:
         return True
 
     def load_data(self):
-        """Загрузка данных"""
         self.print_step(1, "Загрузка данных")
 
         available = self.data_manager.auto_detect_datasets()
@@ -545,7 +473,6 @@ class AdaptiveMLApp:
                 return False
 
     def select_target_column(self):
-        """Выбор target колонки"""
         self.print_step(2, "Целевая переменная")
 
         target_candidates = ['target', 'class', 'label', 'category',
@@ -588,17 +515,46 @@ class AdaptiveMLApp:
         print(f"Образцов: {self.X.shape[0]}")
         print(f"Классов: {len(np.unique(self.y))}")
 
-        # Объяснение сложности
         self.explain_complexity_calculation(self.X.shape[0], self.X.shape[1])
 
         return True
 
+    def explain_complexity_calculation(self, n_samples: int, n_features: int):
+        ratio = n_samples / n_features if n_features > 0 else 0
+
+        print("\n" + "="*70)
+        print("КАК ОПРЕДЕЛЯЕТСЯ СЛОЖНОСТЬ ДАТАСЕТА")
+        print("="*70)
+        print(f"\nФормула: отношение образцов к признакам")
+        print(f"  - Образцов: {n_samples}")
+        print(f"  - Признаков: {n_features}")
+        print(f"  - Отношение: {ratio:.1f}")
+        print("\nКритерии:")
+        print("  - Простой: отношение < 50")
+        print("  - Средний: 50 <= отношение < 200")
+        print("  - Сложный: отношение >= 200")
+
+        if ratio < 50:
+            complexity = "ПРОСТОЙ"
+            recommendation = "Подойдут простые модели: Random Forest, SVM, Logistic Regression"
+        elif ratio < 200:
+            complexity = "СРЕДНЕЙ СЛОЖНОСТИ"
+            recommendation = "Рекомендуются: Gradient Boosting, Random Forest, Neural Network"
+        else:
+            complexity = "СЛОЖНЫЙ"
+            recommendation = "Лучше всего: Neural Network, Gradient Boosting"
+
+        print(f"\nВаш датасет: {complexity}")
+        print(f"\nРекомендация: {recommendation}")
+        print("="*70)
+
+        input("\nНажмите Enter для продолжения...")
+
     def analyze_data(self):
-        """Анализ данных"""
         self.print_step(3, "Анализ данных")
 
         print("\nАнализ характеристик датасета...")
-        self.print_progress("Вычисление статистик признаков")
+        print("  >>> Вычисление статистик признаков")
 
         profiler = DataProfiler(dataset_name="User_Dataset")
         self.profile = profiler.profile_tabular_data(
@@ -606,10 +562,10 @@ class AdaptiveMLApp:
             feature_names=self.feature_columns
         )
 
-        self.print_progress("Анализ распределения классов")
-        self.print_progress("Поиск выбросов и аномалий")
-        self.print_progress("Оценка корреляций")
-        self.print_progress("Формирование рекомендаций")
+        print("  >>> Анализ распределения классов")
+        print("  >>> Поиск выбросов и аномалий")
+        print("  >>> Оценка корреляций")
+        print("  >>> Формирование рекомендаций")
 
         profiler.print_summary()
 
@@ -628,7 +584,6 @@ class AdaptiveMLApp:
         return True
 
     def select_and_train_model(self):
-        """Выбор и обучение модели"""
         self.print_step(4, "Обучение моделей")
 
         print("\nИнициализация селектора моделей...")
@@ -642,12 +597,12 @@ class AdaptiveMLApp:
             print(f"  - Accuracy вес: {self.pipeline_config.scoring['accuracy_weight']}")
             print(f"  - F1-Score вес: {self.pipeline_config.scoring['f1_weight']}")
 
-            self.print_progress("Создание моделей")
+            print("  >>> Создание моделей")
             self.selector.create_default_models(
                 model_types=[k for k, v in self.pipeline_config.models.items() if v.enabled]
             )
         else:
-            self.print_progress("Создание моделей по умолчанию")
+            print("  >>> Создание моделей по умолчанию")
             self.selector.create_default_models()
 
         print("\nПодготовка данных...")
@@ -667,7 +622,7 @@ class AdaptiveMLApp:
         print(f"  - CV в scoring: {'Да' if use_cv else 'Нет'}")
         print(f"  - Метрики: Accuracy (70%) + F1-Score (30%)")
 
-        self.print_progress("Начало обучения и тестирования моделей")
+        print("  >>> Начало обучения и тестирования моделей")
         print("\n" + "="*70)
 
         self.best_model = self.selector.profile_and_select(
@@ -681,7 +636,6 @@ class AdaptiveMLApp:
         return True
 
     def evaluate_and_show_results(self):
-        """Оценка и показ результатов"""
         self.print_step(5, "Результаты")
 
         print("\nФинальная оценка на тестовой выборке...")
@@ -690,7 +644,7 @@ class AdaptiveMLApp:
             self.X, self.y, test_size=0.2, random_state=42, stratify=self.y
         )
 
-        self.print_progress("Генерация предсказаний")
+        print("  >>> Генерация предсказаний")
         y_pred = self.selector.predict(X_test)
         accuracy = accuracy_score(y_test, y_pred)
 
@@ -703,7 +657,7 @@ class AdaptiveMLApp:
         print(classification_report(y_test, y_pred))
 
         try:
-            self.print_progress("Построение матрицы ошибок")
+            print("  >>> Построение матрицы ошибок")
             cm = confusion_matrix(y_test, y_pred)
             fig, ax = plt.subplots(figsize=(8, 6))
             sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', ax=ax)
@@ -725,14 +679,14 @@ class AdaptiveMLApp:
             'timestamp': str(datetime.now())
         }
 
-        self.print_progress("Сохранение результатов")
+        print("  >>> Сохранение результатов")
         results_path = self.output_dir / "results.json"
         with open(results_path, 'w', encoding='utf-8') as f:
             json.dump(self.results, f, indent=2, ensure_ascii=False)
         print(f"\nРезультаты: {results_path}")
 
         models_dir = self.output_dir / "models"
-        self.print_progress("Сохранение моделей")
+        print("  >>> Сохранение моделей")
         self.selector.save_all_models(str(models_dir))
         print(f"Модели: {models_dir}")
 
@@ -740,7 +694,6 @@ class AdaptiveMLApp:
         return True
 
     def predict_new_data(self):
-        """Предсказание новых данных"""
         self.print_step(6, "Предсказание")
 
         choice = self.get_user_choice("\nДействие", [
@@ -779,7 +732,6 @@ class AdaptiveMLApp:
         return True
 
     def show_summary(self):
-        """Показ итогов"""
         self.print_header("Готово!")
         print("Успешно!")
         print(f"\n{self.output_dir}")
@@ -789,7 +741,6 @@ class AdaptiveMLApp:
         print("\nСпасибо!")
 
     def run(self):
-        """Главный цикл приложения"""
         self.initialize_data_manager()
 
         while True:
@@ -801,8 +752,6 @@ class AdaptiveMLApp:
             elif choice == 2:
                 self.create_test_datasets_menu()
             elif choice == 3:
-                self.create_large_dataset_menu()
-            elif choice == 4:
                 self.view_results_menu()
             elif choice == 0:
                 print("\nПрограмма завершена")

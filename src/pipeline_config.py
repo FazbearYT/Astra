@@ -200,13 +200,13 @@ def interactive_config() -> PipelineConfig:
             config.scoring['accuracy_weight'] = acc_weight
             config.scoring['f1_weight'] = f1_weight
             config.scoring['cv_weight'] = 1.0 - acc_weight - f1_weight
-        except:
+        except Exception:
             print("  Использованы значения по умолчанию")
 
         try:
             cv_folds = int(input("\n  Количество CV folds [5]: ").strip() or "5")
             config.training['cv_folds'] = cv_folds
-        except:
+        except Exception:
             pass
 
         return config
