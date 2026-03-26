@@ -267,35 +267,28 @@ class DataProfiler:
         if self.profile is None:
             raise ValueError("Сначала создайте профиль")
 
-        print("\n" + "="*70)
-        print(f"ПРОФИЛЬ ДАТАСЕТА: {self.dataset_name.upper()}")
-        print("="*70)
-
-        print(f"\nРАЗМЕРЫ:")
-        print(f"   - Образцов: {self.profile.n_samples:,}")
-        print(f"   - Признаков: {self.profile.n_features}")
+        print("\nПрофиль датасета:")
+        print(f"  Образцов: {self.profile.n_samples:,}")
+        print(f"  Признаков: {self.profile.n_features}")
         if self.profile.n_classes:
-            print(f"   - Классов: {self.profile.n_classes}")
-        print(f"   - Размер в памяти: {self.profile.memory_size_mb:.2f} MB")
+            print(f"  Классов: {self.profile.n_classes}")
+        print(f"  Размер: {self.profile.memory_size_mb:.2f} MB")
 
-        print(f"\nБАЛАНС КЛАССОВ:")
         if self.profile.class_distribution:
+            print("\nРаспределение классов:")
             for cls, count in self.profile.class_distribution.items():
                 pct = count / self.profile.n_samples * 100
-                print(f"   - Класс {cls}: {count} ({pct:.1f}%)")
-            print(f"   - Ratio баланса: {self.profile.class_balance_ratio:.3f}")
+                print(f"  Класс {cls}: {count} ({pct:.1f}%)")
 
-        print(f"\nСЛОЖНОСТЬ ДАННЫХ: {self.profile.data_complexity.upper()}")
+        print(f"\nСложность: {self.profile.data_complexity.upper()}")
 
-        print(f"\nРЕКОМЕНДУЕМЫЕ МОДЕЛИ:")
+        print("\nРекомендуемые модели:")
         for model in self.profile.recommended_models:
-            print(f"   - {model}")
+            print(f"  - {model}")
 
-        print(f"\nТРЕБУЕМАЯ ПРЕДОБРАБОТКА:")
+        print("\nПредобработка:")
         for need in self.profile.preprocessing_needs:
-            print(f"   - {need.replace('_', ' ').title()}")
-
-        print("\n" + "="*70)
+            print(f"  - {need.replace('_', ' ').title()}")
 
 
 def profile_from_csv(filepath: str, target_column: Optional[str] = None,

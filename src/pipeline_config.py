@@ -66,7 +66,7 @@ def get_default_config() -> PipelineConfig:
         enabled=True,
         params={
             'n_estimators': 100,
-            'max_depth': 10,
+            'max_depth': None,
             'random_state': 42,
             'n_jobs': -1
         },
@@ -84,7 +84,9 @@ def get_default_config() -> PipelineConfig:
         params={
             'kernel': 'rbf',
             'probability': True,
-            'random_state': 42
+            'random_state': 42,
+            'C': 1.0,
+            'gamma': 'scale'
         },
         profile_requirements={
             'data_complexity': 'medium',
@@ -98,7 +100,7 @@ def get_default_config() -> PipelineConfig:
         enabled=True,
         params={
             'n_estimators': 100,
-            'max_depth': 5,
+            'max_depth': 3,
             'learning_rate': 0.1,
             'random_state': 42
         },
@@ -113,9 +115,10 @@ def get_default_config() -> PipelineConfig:
         name="NeuralNetwork_Specialist",
         enabled=True,
         params={
-            'hidden_layer_sizes': (100, 50),
+            'hidden_layer_sizes': (10, 10),
             'max_iter': 1000,
-            'random_state': 42
+            'random_state': 42,
+            'learning_rate_init': 0.001
         },
         profile_requirements={
             'data_complexity': 'complex',
@@ -129,7 +132,9 @@ def get_default_config() -> PipelineConfig:
         enabled=True,
         params={
             'max_iter': 1000,
-            'random_state': 42
+            'random_state': 42,
+            'C': 1.0,
+            'solver': 'lbfgs'
         },
         profile_requirements={
             'data_complexity': 'simple',
@@ -161,20 +166,21 @@ def get_accurate_config() -> PipelineConfig:
     config.models['random_forest'].params['n_estimators'] = 200
     config.models['gradient_boosting'].params['n_estimators'] = 200
 
+    config.models['svm'].params['C'] = 1.5
+
     return config
 
 
 def interactive_config() -> PipelineConfig:
-    print("\n" + "="*70)
-    print("НАСТРОЙКА PIPELINE")
-    print("="*70)
+    print("\nНастройка Pipeline")
+    print("-" * 40)
 
     config = get_default_config()
 
     print("\nВыберите режим:")
     print("  1. Быстрый (2 модели, 3 CV folds)")
     print("  2. Стандартный (5 моделей, 5 CV folds)")
-    print("  3. Точный (5 моделей, 10 CV folds, CV в скоре)")
+    print("  3. Точный (5 моделей, 10 CV folds)")
     print("  4. Свой (настроить вручную)")
 
     choice = input("\nВаш выбор (1-4): ").strip()

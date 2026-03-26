@@ -26,8 +26,6 @@ os.environ['OMP_NUM_THREADS'] = str(os.cpu_count())
 os.environ['OPENBLAS_NUM_THREADS'] = str(os.cpu_count())
 os.environ['MKL_NUM_THREADS'] = str(os.cpu_count())
 
-from progress import get_progress_bar, PROGRESS_ENABLED
-
 
 class SpecializedModel:
     def __init__(self, name: str, model: BaseEstimator,
@@ -175,7 +173,7 @@ class AdaptiveModelSelector:
                 name="RandomForest_Specialist",
                 model=RandomForestClassifier(
                     n_estimators=100,
-                    max_depth=10,
+                    max_depth=None,
                     random_state=42,
                     n_jobs=-1
                 ),
@@ -195,7 +193,13 @@ class AdaptiveModelSelector:
                 name="SVM_Specialist",
                 model=Pipeline([
                     ('scaler', StandardScaler()),
-                    ('svc', SVC(kernel='rbf', probability=True, random_state=42))
+                    ('svc', SVC(
+                        kernel='rbf',
+                        probability=True,
+                        random_state=42,
+                        C=1.0,
+                        gamma='scale'
+                    ))
                 ]),
                 profile_requirements={
                     'data_complexity': 'medium',
@@ -211,7 +215,7 @@ class AdaptiveModelSelector:
                 name="GradientBoosting_Specialist",
                 model=GradientBoostingClassifier(
                     n_estimators=100,
-                    max_depth=5,
+                    max_depth=3,
                     learning_rate=0.1,
                     random_state=42
                 ),
@@ -230,9 +234,10 @@ class AdaptiveModelSelector:
                 model=Pipeline([
                     ('scaler', StandardScaler()),
                     ('mlp', MLPClassifier(
-                        hidden_layer_sizes=(100, 50),
+                        hidden_layer_sizes=(10, 10),
                         max_iter=1000,
-                        random_state=42
+                        random_state=42,
+                        learning_rate_init=0.001
                     ))
                 ]),
                 profile_requirements={
@@ -252,7 +257,8 @@ class AdaptiveModelSelector:
                     ('lr', LogisticRegression(
                         max_iter=1000,
                         random_state=42,
-                        n_jobs=-1
+                        C=1.0,
+                        solver='lbfgs'
                     ))
                 ]),
                 profile_requirements={
@@ -272,11 +278,8 @@ class AdaptiveModelSelector:
                           use_cv_in_scoring: bool = False) -> SpecializedModel:
         import multiprocessing
 
-        print("\n" + "="*70)
-        print("АДАПТИВНЫЙ ВЫБОР МОДЕЛИ")
-        print("="*70)
-        print(f"\nДоступно потоков: {multiprocessing.cpu_count()}")
-        print(f"Используется для обучения: все доступные (n_jobs=-1)")
+        print("\nАдаптивный выбор модели")
+        print(f"Доступно потоков: {multiprocessing.cpu_count()}")
 
         if data_profile is None:
             data_profile = {
@@ -292,57 +295,46 @@ class AdaptiveModelSelector:
             X, y, test_size=0.2, random_state=42, stratify=y
         )
 
-        print(f"\nДанные:")
-        print(f"   - Train: {X_train.shape[0]} образцов")
-        print(f"   - Test: {X_test.shape[0]} образцов")
+        print(f"Данные: Train={X_train.shape[0]}, Test={X_test.shape[0]}")
 
-        print("\nОценка соответствия моделей профилю данных:")
+        print("\nОценка соответствия моделей:")
         model_scores = []
 
-        for model in get_progress_bar(self.models, desc="Оценка моделей"):
+        for model in self.models:
             profile_score = model.matches_profile(data_profile)
             model_scores.append((model, profile_score))
-            print(f"   - {model.name}: {profile_score:.3f}")
+            print(f"  {model.name}: {profile_score:.3f}")
 
         model_scores.sort(key=lambda x: x[1], reverse=True)
 
-        print("\nТестирование ВСЕХ моделей:")
-        print("="*70)
+        print("\nТестирование моделей:")
 
         results_table = []
         total_models = len(model_scores)
 
-        for idx, (model, profile_score) in enumerate(get_progress_bar(model_scores,
-                                                                       desc="Тестирование моделей",
-                                                                       unit="модель"), 1):
-            print(f"\n[{idx}/{total_models}] Тестирование: {model.name}")
-            print(f"   Соответствие профилю: {profile_score:.3f}")
-            print("-" * 70)
+        for idx, (model, profile_score) in enumerate(model_scores, 1):
+            print(f"\n[{idx}/{total_models}] {model.name}")
 
             try:
-                print("   [1/4] Обучение модели...", end=" ", flush=True)
+                print("  Обучение...", end=" ", flush=True)
                 train_start = time.time()
                 model.fit(X_train, y_train)
                 train_time = time.time() - train_start
-                print(f"готово ({train_time:.2f}s)")
+                print(f"({train_time:.2f}s)")
 
-                print("   [2/4] Оценка на тестовой выборке...", end=" ", flush=True)
+                print("  Оценка...", end=" ", flush=True)
                 metrics = model.evaluate(X_test, y_test)
-                print(f"готово")
+                print("готово")
 
-                print(f"   [3/4] Кросс-валидация ({cv_folds} folds)...", end=" ", flush=True)
+                print(f"  Кросс-валидация ({cv_folds} folds)...", end=" ", flush=True)
                 cv_start = time.time()
                 cv_results = model.cross_validate(X_train, y_train, cv=cv_folds)
                 cv_time = time.time() - cv_start
-                print(f"готово ({cv_time:.2f}s)")
+                print(f"({cv_time:.2f}s)")
 
-                print("\n   Результаты:")
-                print(f"      Accuracy:  {metrics['accuracy']:.4f}")
-                print(f"      F1-Score:  {metrics['f1']:.4f}")
-                print(f"      Precision: {metrics['precision']:.4f}")
-                print(f"      Recall:    {metrics['recall']:.4f}")
-                print(f"      CV Score:  {cv_results['cv_mean']:.4f} (+/- {cv_results['cv_std']:.4f})")
-                print(f"      Время:     {train_time:.3f}s")
+                print(f"  Accuracy: {metrics['accuracy']:.4f}")
+                print(f"  F1-Score: {metrics['f1']:.4f}")
+                print(f"  CV Score: {cv_results['cv_mean']:.4f}")
 
                 if use_cv_in_scoring:
                     final_score = (
@@ -356,7 +348,7 @@ class AdaptiveModelSelector:
                         metrics['f1'] * 0.3
                     )
 
-                print(f"      Итоговый скор: {final_score:.4f}")
+                print(f"  Итоговый скор: {final_score:.4f}")
 
                 results_table.append({
                     'model': model.name,
@@ -380,19 +372,15 @@ class AdaptiveModelSelector:
                 })
 
             except Exception as e:
-                print(f"\n   ОШИБКА: {str(e)}")
-                import traceback
-                traceback.print_exc()
+                print(f"  Ошибка: {str(e)}")
                 continue
 
-        print("\n" + "="*70)
-        print("СРАВНЕНИЕ МОДЕЛЕЙ (отсортировано по итоговому скору)")
-        print("="*70)
-        print(f"{'Модель':<30} {'Accuracy':<10} {'F1-Score':<10} {'Скор':<10} {'Время (с)':<10}")
-        print("-"*70)
+        print("\nСравнение моделей:")
+        print(f"{'Модель':<30} {'Accuracy':<10} {'F1-Score':<10} {'Скор':<10}")
+        print("-" * 65)
 
         for result in sorted(results_table, key=lambda x: x['final_score'], reverse=True):
-            print(f"{result['model']:<30} {result['accuracy']:<10.4f} {result['f1']:<10.4f} {result['final_score']:<10.4f} {result['training_time']:<10.3f}")
+            print(f"{result['model']:<30} {result['accuracy']:<10.4f} {result['f1']:<10.4f} {result['final_score']:<10.4f}")
 
         if not results_table:
             raise ValueError("Ни одна модель не была успешно обучена!")
@@ -402,12 +390,9 @@ class AdaptiveModelSelector:
 
         self.best_model = best_model
 
-        print("\n" + "="*70)
-        print(f"ВЫБРАНА МОДЕЛЬ: {best_model.name}")
-        print(f"   Accuracy: {best_result['accuracy']:.4f}")
-        print(f"   F1-Score: {best_result['f1']:.4f}")
-        print(f"   Итоговый скор: {best_result['final_score']:.4f}")
-        print("="*70)
+        print(f"\nВыбрана модель: {best_model.name}")
+        print(f"Accuracy: {best_result['accuracy']:.4f}")
+        print(f"F1-Score: {best_result['f1']:.4f}")
 
         return best_model
 
@@ -430,7 +415,7 @@ class AdaptiveModelSelector:
         os.makedirs(directory, exist_ok=True)
 
         saved_count = 0
-        for model in get_progress_bar(self.models, desc="Сохранение моделей"):
+        for model in self.models:
             if model.is_trained:
                 filepath = os.path.join(directory, f"{model.name}.pkl")
                 model.save(filepath)
@@ -443,12 +428,11 @@ class AdaptiveModelSelector:
     def load_models(self, directory: str = "saved_models"):
         self.models = []
 
-        pkl_files = [f for f in os.listdir(directory) if f.endswith('.pkl')]
-
-        for filename in get_progress_bar(pkl_files, desc="Загрузка моделей"):
-            filepath = os.path.join(directory, filename)
-            model = SpecializedModel.load(filepath)
-            self.models.append(model)
+        for filename in os.listdir(directory):
+            if filename.endswith('.pkl'):
+                filepath = os.path.join(directory, filename)
+                model = SpecializedModel.load(filepath)
+                self.models.append(model)
 
         history_path = os.path.join(directory, "selection_history.json")
         if os.path.exists(history_path):

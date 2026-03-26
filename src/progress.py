@@ -6,7 +6,7 @@ import sys
 from typing import Optional, Iterable
 from contextlib import contextmanager
 
-PROGRESS_ENABLED = True
+PROGRESS_ENABLED = False
 
 
 class DummyProgressBar:
