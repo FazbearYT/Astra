@@ -22,6 +22,7 @@ sys.path.insert(0, str(Path(__file__).parent / "src"))
 from model_profiler import DataProfiler
 from model_selector import AdaptiveModelSelector
 from pipeline_config import PipelineConfig, get_default_config, get_fast_config, get_accurate_config, interactive_config
+from progress import get_progress_bar, progress_range, progress_context, enable_progress, disable_progress
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
 import matplotlib
@@ -39,76 +40,86 @@ class DataManager:
     def create_iris_dataset(self) -> Path:
         from sklearn.datasets import load_iris
 
-        iris = load_iris()
-        df = pd.DataFrame(iris.data, columns=iris.feature_names)
-        df['target'] = iris.target
-        df['target_name'] = df['target'].map({0: 'setosa', 1: 'versicolor', 2: 'virginica'})
+        with progress_context("Создание Iris dataset", total=1) as pbar:
+            iris = load_iris()
+            df = pd.DataFrame(iris.data, columns=iris.feature_names)
+            df['target'] = iris.target
+            df['target_name'] = df['target'].map({0: 'setosa', 1: 'versicolor', 2: 'virginica'})
 
-        filepath = self.tabular_dir / "iris.csv"
-        df.to_csv(filepath, index=False, encoding='utf-8')
+            filepath = self.tabular_dir / "iris.csv"
+            df.to_csv(filepath, index=False, encoding='utf-8')
+            pbar.update(1)
 
-        return filepath
+            return filepath
 
     def create_wine_dataset(self) -> Path:
         from sklearn.datasets import load_wine
 
-        wine = load_wine()
-        df = pd.DataFrame(wine.data, columns=wine.feature_names)
-        df['target'] = wine.target
-        df['target_name'] = df['target'].map({0: 'class_0', 1: 'class_1', 2: 'class_2'})
+        with progress_context("Создание Wine dataset", total=1) as pbar:
+            wine = load_wine()
+            df = pd.DataFrame(wine.data, columns=wine.feature_names)
+            df['target'] = wine.target
+            df['target_name'] = df['target'].map({0: 'class_0', 1: 'class_1', 2: 'class_2'})
 
-        filepath = self.tabular_dir / "wine.csv"
-        df.to_csv(filepath, index=False, encoding='utf-8')
+            filepath = self.tabular_dir / "wine.csv"
+            df.to_csv(filepath, index=False, encoding='utf-8')
+            pbar.update(1)
 
-        return filepath
+            return filepath
 
     def create_digits_dataset(self) -> Path:
         from sklearn.datasets import load_digits
 
-        digits = load_digits()
-        df = pd.DataFrame(digits.data, columns=[f'pixel_{i}' for i in range(64)])
-        df['target'] = digits.target
+        with progress_context("Создание Digits dataset", total=1) as pbar:
+            digits = load_digits()
+            df = pd.DataFrame(digits.data, columns=[f'pixel_{i}' for i in range(64)])
+            df['target'] = digits.target
 
-        filepath = self.tabular_dir / "digits.csv"
-        df.to_csv(filepath, index=False, encoding='utf-8')
+            filepath = self.tabular_dir / "digits.csv"
+            df.to_csv(filepath, index=False, encoding='utf-8')
+            pbar.update(1)
 
-        return filepath
+            return filepath
 
     def create_titanic_dataset(self) -> Path:
-        np.random.seed(42)
-        n = 891
+        with progress_context("Создание Titanic dataset", total=1) as pbar:
+            np.random.seed(42)
+            n = 891
 
-        df = pd.DataFrame({
-            'pclass': np.random.randint(1, 4, n),
-            'gender': np.random.randint(0, 2, n),
-            'age': np.random.normal(30, 14, n).clip(0, 80),
-            'sibsp': np.random.poisson(0.5, n),
-            'parch': np.random.poisson(0.4, n),
-            'fare': np.random.exponential(30, n),
-        })
-        df['target'] = ((df['gender'] == 1) & (df['pclass'] < 3) |
-                       (df['age'] < 10)).astype(int)
+            df = pd.DataFrame({
+                'pclass': np.random.randint(1, 4, n),
+                'gender': np.random.randint(0, 2, n),
+                'age': np.random.normal(30, 14, n).clip(0, 80),
+                'sibsp': np.random.poisson(0.5, n),
+                'parch': np.random.poisson(0.4, n),
+                'fare': np.random.exponential(30, n),
+            })
+            df['target'] = ((df['gender'] == 1) & (df['pclass'] < 3) |
+                           (df['age'] < 10)).astype(int)
 
-        filepath = self.tabular_dir / "titanic.csv"
-        df.to_csv(filepath, index=False, encoding='utf-8')
+            filepath = self.tabular_dir / "titanic.csv"
+            df.to_csv(filepath, index=False, encoding='utf-8')
+            pbar.update(1)
 
-        return filepath
+            return filepath
 
     def create_synthetic_dataset(self) -> Path:
         from sklearn.datasets import make_blobs
 
-        np.random.seed(42)
-        X, y = make_blobs(n_samples=500, n_features=5, centers=3,
-                         cluster_std=1.5, random_state=42)
+        with progress_context("Создание Synthetic dataset", total=1) as pbar:
+            np.random.seed(42)
+            X, y = make_blobs(n_samples=500, n_features=5, centers=3,
+                             cluster_std=1.5, random_state=42)
 
-        df = pd.DataFrame(X, columns=[f'feature_{i}' for i in range(5)])
-        df['target'] = y
-        df['target_name'] = df['target'].map({0: 'class_A', 1: 'class_B', 2: 'class_C'})
+            df = pd.DataFrame(X, columns=[f'feature_{i}' for i in range(5)])
+            df['target'] = y
+            df['target_name'] = df['target'].map({0: 'class_A', 1: 'class_B', 2: 'class_C'})
 
-        filepath = self.tabular_dir / "synthetic.csv"
-        df.to_csv(filepath, index=False, encoding='utf-8')
+            filepath = self.tabular_dir / "synthetic.csv"
+            df.to_csv(filepath, index=False, encoding='utf-8')
+            pbar.update(1)
 
-        return filepath
+            return filepath
 
     def create_large_dataset(self) -> Path:
         from sklearn.datasets import make_classification
@@ -116,29 +127,34 @@ class DataManager:
         print("\nГенерация большого датасета (100,000 строк)...")
         print("Это может занять 1-2 минуты")
 
-        X, y = make_classification(
-            n_samples=100000,
-            n_features=20,
-            n_informative=15,
-            n_redundant=5,
-            n_classes=5,
-            n_clusters_per_class=2,
-            random_state=42
-        )
+        with progress_context("Генерация данных", total=100) as pbar:
+            X, y = make_classification(
+                n_samples=100000,
+                n_features=20,
+                n_informative=15,
+                n_redundant=5,
+                n_classes=5,
+                n_clusters_per_class=2,
+                random_state=42
+            )
+            pbar.update(50)
 
-        df = pd.DataFrame(X, columns=[f'feature_{i}' for i in range(20)])
-        df['target'] = y
+            df = pd.DataFrame(X, columns=[f'feature_{i}' for i in range(20)])
+            df['target'] = y
+            pbar.update(30)
 
-        filepath = self.tabular_dir / "large_test.csv"
-        df.to_csv(filepath, index=False, encoding='utf-8')
+            filepath = self.tabular_dir / "large_test.csv"
+            df.to_csv(filepath, index=False, encoding='utf-8')
+            pbar.update(20)
 
-        return filepath
+            return filepath
 
     def auto_detect_datasets(self) -> List[Dict]:
         available = []
 
         if self.tabular_dir.exists():
-            for csv_file in self.tabular_dir.glob("*.csv"):
+            csv_files = list(self.tabular_dir.glob("*.csv"))
+            for csv_file in get_progress_bar(csv_files, desc="Поиск датасетов"):
                 try:
                     df = pd.read_csv(csv_file)
                     available.append({
@@ -159,11 +175,17 @@ class DataManager:
         print("\nСоздание всех тестовых датасетов...")
 
         paths = []
-        paths.append(self.create_iris_dataset())
-        paths.append(self.create_wine_dataset())
-        paths.append(self.create_digits_dataset())
-        paths.append(self.create_titanic_dataset())
-        paths.append(self.create_synthetic_dataset())
+        datasets = [
+            (self.create_iris_dataset, "Iris"),
+            (self.create_wine_dataset, "Wine"),
+            (self.create_digits_dataset, "Digits"),
+            (self.create_titanic_dataset, "Titanic"),
+            (self.create_synthetic_dataset, "Synthetic"),
+        ]
+
+        for create_func, name in get_progress_bar(datasets, desc="Создание датасетов", unit="dataset"):
+            path = create_func()
+            paths.append(path)
 
         print(f"\nСоздано {len(paths)} датасетов в {self.tabular_dir}")
 
@@ -364,7 +386,7 @@ class AdaptiveMLApp:
         print(f"\nНайдено сессий: {len(runs)}")
         print("\nПоследние 5 сессий:")
 
-        for run in runs[-5:]:
+        for run in get_progress_bar(runs[-5:], desc="Загрузка результатов"):
             results_file = run / "results.json"
             if results_file.exists():
                 with open(results_file, 'r') as f:
@@ -449,8 +471,9 @@ class AdaptiveMLApp:
 
             if choice <= len(available):
                 selected = options[choice - 1]
+                print(f"\nЗагрузка {selected['name']}...")
                 self.data = self.data_manager.load_dataset(selected['path'])
-                print(f"\nЗагружено {len(self.data)} строк")
+                print(f"Загружено {len(self.data)} строк")
                 return True
             elif choice == len(options):
                 self.create_test_datasets_menu()
@@ -501,7 +524,7 @@ class AdaptiveMLApp:
         all_feature_cols = [col for col in self.data.columns if col != self.target_column]
 
         self.feature_columns = []
-        for col in all_feature_cols:
+        for col in get_progress_bar(all_feature_cols, desc="Анализ колонок"):
             if pd.api.types.is_numeric_dtype(self.data[col]):
                 self.feature_columns.append(col)
 

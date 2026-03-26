@@ -26,6 +26,8 @@ os.environ['OMP_NUM_THREADS'] = str(os.cpu_count())
 os.environ['OPENBLAS_NUM_THREADS'] = str(os.cpu_count())
 os.environ['MKL_NUM_THREADS'] = str(os.cpu_count())
 
+from progress import get_progress_bar, PROGRESS_ENABLED
+
 
 class SpecializedModel:
     def __init__(self, name: str, model: BaseEstimator,
@@ -297,7 +299,7 @@ class AdaptiveModelSelector:
         print("\nОценка соответствия моделей профилю данных:")
         model_scores = []
 
-        for model in self.models:
+        for model in get_progress_bar(self.models, desc="Оценка моделей"):
             profile_score = model.matches_profile(data_profile)
             model_scores.append((model, profile_score))
             print(f"   - {model.name}: {profile_score:.3f}")
@@ -310,7 +312,9 @@ class AdaptiveModelSelector:
         results_table = []
         total_models = len(model_scores)
 
-        for idx, (model, profile_score) in enumerate(model_scores, 1):
+        for idx, (model, profile_score) in enumerate(get_progress_bar(model_scores,
+                                                                       desc="Тестирование моделей",
+                                                                       unit="модель"), 1):
             print(f"\n[{idx}/{total_models}] Тестирование: {model.name}")
             print(f"   Соответствие профилю: {profile_score:.3f}")
             print("-" * 70)
@@ -426,7 +430,7 @@ class AdaptiveModelSelector:
         os.makedirs(directory, exist_ok=True)
 
         saved_count = 0
-        for model in self.models:
+        for model in get_progress_bar(self.models, desc="Сохранение моделей"):
             if model.is_trained:
                 filepath = os.path.join(directory, f"{model.name}.pkl")
                 model.save(filepath)
@@ -439,11 +443,12 @@ class AdaptiveModelSelector:
     def load_models(self, directory: str = "saved_models"):
         self.models = []
 
-        for filename in os.listdir(directory):
-            if filename.endswith('.pkl'):
-                filepath = os.path.join(directory, filename)
-                model = SpecializedModel.load(filepath)
-                self.models.append(model)
+        pkl_files = [f for f in os.listdir(directory) if f.endswith('.pkl')]
+
+        for filename in get_progress_bar(pkl_files, desc="Загрузка моделей"):
+            filepath = os.path.join(directory, filename)
+            model = SpecializedModel.load(filepath)
+            self.models.append(model)
 
         history_path = os.path.join(directory, "selection_history.json")
         if os.path.exists(history_path):
