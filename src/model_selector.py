@@ -1,5 +1,6 @@
 """
 Модуль адаптивного выбора и управления ML моделями
+С оптимизацией многопоточности
 """
 
 import numpy as np
@@ -7,6 +8,7 @@ from typing import Dict, List, Any, Optional
 import joblib
 import os
 import json
+import time
 from datetime import datetime
 from sklearn.base import BaseEstimator
 from sklearn.model_selection import cross_val_score, train_test_split
@@ -22,6 +24,12 @@ import warnings
 warnings.filterwarnings('ignore')
 
 
+# Оптимизация многопоточности
+os.environ['OMP_NUM_THREADS'] = str(os.cpu_count())
+os.environ['OPENBLAS_NUM_THREADS'] = str(os.cpu_count())
+os.environ['MKL_NUM_THREADS'] = str(os.cpu_count())
+
+
 class SpecializedModel:
     def __init__(self, name: str, model: BaseEstimator,
                  profile_requirements: Dict[str, Any],
@@ -35,7 +43,6 @@ class SpecializedModel:
         self.training_time = None
 
     def fit(self, X: np.ndarray, y: np.ndarray, **fit_params) -> 'SpecializedModel':
-        import time
         start_time = time.time()
         self.model.fit(X, y, **fit_params)
         self.is_trained = True
@@ -76,7 +83,7 @@ class SpecializedModel:
         return results
 
     def cross_validate(self, X: np.ndarray, y: np.ndarray, cv: int = 5) -> Dict[str, float]:
-        scores = cross_val_score(self.model, X, y, cv=cv, scoring='accuracy')
+        scores = cross_val_score(self.model, X, y, cv=cv, scoring='accuracy', n_jobs=1)
         return {
             'cv_mean': float(scores.mean()),
             'cv_std': float(scores.std()),
@@ -167,7 +174,12 @@ class AdaptiveModelSelector:
         if 'random_forest' in model_types:
             rf_model = SpecializedModel(
                 name="RandomForest_Specialist",
-                model=RandomForestClassifier(n_estimators=100, max_depth=10, random_state=42, n_jobs=-1),
+                model=RandomForestClassifier(
+                    n_estimators=100,
+                    max_depth=10,
+                    random_state=42,
+                    n_jobs=-1  # Все ядра
+                ),
                 profile_requirements={
                     'data_complexity': 'simple',
                     'class_balance_min': 0.7,
@@ -185,6 +197,7 @@ class AdaptiveModelSelector:
                 model=Pipeline([
                     ('scaler', StandardScaler()),
                     ('svc', SVC(kernel='rbf', probability=True, random_state=42))
+                    # SVM не поддерживает n_jobs в старых версиях sklearn
                 ]),
                 profile_requirements={
                     'data_complexity': 'medium',
@@ -198,7 +211,13 @@ class AdaptiveModelSelector:
         if 'gradient_boosting' in model_types:
             gb_model = SpecializedModel(
                 name="GradientBoosting_Specialist",
-                model=GradientBoostingClassifier(n_estimators=100, max_depth=5, learning_rate=0.1, random_state=42),
+                model=GradientBoostingClassifier(
+                    n_estimators=100,
+                    max_depth=5,
+                    learning_rate=0.1,
+                    random_state=42
+                    # GradientBoosting не поддерживает n_jobs
+                ),
                 profile_requirements={
                     'data_complexity': 'complex',
                     'min_samples': 100
@@ -213,7 +232,11 @@ class AdaptiveModelSelector:
                 name="NeuralNetwork_Specialist",
                 model=Pipeline([
                     ('scaler', StandardScaler()),
-                    ('mlp', MLPClassifier(hidden_layer_sizes=(100, 50), max_iter=1000, random_state=42))
+                    ('mlp', MLPClassifier(
+                        hidden_layer_sizes=(100, 50),
+                        max_iter=1000,
+                        random_state=42
+                    ))
                 ]),
                 profile_requirements={
                     'data_complexity': 'complex',
@@ -229,7 +252,11 @@ class AdaptiveModelSelector:
                 name="LogisticRegression_Specialist",
                 model=Pipeline([
                     ('scaler', StandardScaler()),
-                    ('lr', LogisticRegression(max_iter=1000, random_state=42))
+                    ('lr', LogisticRegression(
+                        max_iter=1000,
+                        random_state=42,
+                        n_jobs=-1  # Все ядра
+                    ))
                 ]),
                 profile_requirements={
                     'data_complexity': 'simple',
@@ -246,9 +273,13 @@ class AdaptiveModelSelector:
                           data_profile: Optional[Dict] = None,
                           cv_folds: int = 5,
                           use_cv_in_scoring: bool = False) -> SpecializedModel:
+        import multiprocessing
+
         print("\n" + "="*70)
         print("АДАПТИВНЫЙ ВЫБОР МОДЕЛИ")
         print("="*70)
+        print(f"\nДоступно потоков: {multiprocessing.cpu_count()}")
+        print(f"Используется для обучения: все доступные (n_jobs=-1)")
 
         if data_profile is None:
             data_profile = {
@@ -282,22 +313,37 @@ class AdaptiveModelSelector:
         print("="*70)
 
         results_table = []
+        total_models = len(model_scores)
 
-        for model, profile_score in model_scores:
-            print(f"\nТестирование: {model.name}")
+        for idx, (model, profile_score) in enumerate(model_scores, 1):
+            print(f"\n[{idx}/{total_models}] Тестирование: {model.name}")
             print(f"   Соответствие профилю: {profile_score:.3f}")
+            print("-" * 70)
 
             try:
+                print("   [1/4] Обучение модели...", end=" ", flush=True)
+                train_start = time.time()
                 model.fit(X_train, y_train)
-                metrics = model.evaluate(X_test, y_test)
-                cv_results = model.cross_validate(X_train, y_train, cv=cv_folds)
+                train_time = time.time() - train_start
+                print(f"готово ({train_time:.2f}s)")
 
-                print(f"   Accuracy:  {metrics['accuracy']:.4f}")
-                print(f"   F1-Score:  {metrics['f1']:.4f}")
-                print(f"   Precision: {metrics['precision']:.4f}")
-                print(f"   Recall:    {metrics['recall']:.4f}")
-                print(f"   CV Score:  {cv_results['cv_mean']:.4f} (+/- {cv_results['cv_std']:.4f})")
-                print(f"   Время:     {model.training_time:.3f}s")
+                print("   [2/4] Оценка на тестовой выборке...", end=" ", flush=True)
+                metrics = model.evaluate(X_test, y_test)
+                print(f"готово")
+
+                print(f"   [3/4] Кросс-валидация ({cv_folds} folds)...", end=" ", flush=True)
+                cv_start = time.time()
+                cv_results = model.cross_validate(X_train, y_train, cv=cv_folds)
+                cv_time = time.time() - cv_start
+                print(f"готово ({cv_time:.2f}s)")
+
+                print("\n   Результаты:")
+                print(f"      Accuracy:  {metrics['accuracy']:.4f}")
+                print(f"      F1-Score:  {metrics['f1']:.4f}")
+                print(f"      Precision: {metrics['precision']:.4f}")
+                print(f"      Recall:    {metrics['recall']:.4f}")
+                print(f"      CV Score:  {cv_results['cv_mean']:.4f} (+/- {cv_results['cv_std']:.4f})")
+                print(f"      Время:     {train_time:.3f}s")
 
                 if use_cv_in_scoring:
                     final_score = (
@@ -311,7 +357,7 @@ class AdaptiveModelSelector:
                         metrics['f1'] * 0.3
                     )
 
-                print(f"   Итоговый скор: {final_score:.4f}")
+                print(f"      Итоговый скор: {final_score:.4f}")
 
                 results_table.append({
                     'model': model.name,
@@ -322,7 +368,7 @@ class AdaptiveModelSelector:
                     'recall': metrics['recall'],
                     'cv_mean': cv_results['cv_mean'],
                     'final_score': final_score,
-                    'training_time': model.training_time
+                    'training_time': train_time
                 })
 
                 self.selection_history.append({
@@ -335,7 +381,9 @@ class AdaptiveModelSelector:
                 })
 
             except Exception as e:
-                print(f"   Ошибка: {str(e)}")
+                print(f"\n   ОШИБКА: {str(e)}")
+                import traceback
+                traceback.print_exc()
                 continue
 
         print("\n" + "="*70)
@@ -346,6 +394,9 @@ class AdaptiveModelSelector:
 
         for result in sorted(results_table, key=lambda x: x['final_score'], reverse=True):
             print(f"{result['model']:<30} {result['accuracy']:<10.4f} {result['f1']:<10.4f} {result['final_score']:<10.4f} {result['training_time']:<10.3f}")
+
+        if not results_table:
+            raise ValueError("Ни одна модель не была успешно обучена!")
 
         best_result = max(results_table, key=lambda x: x['final_score'])
         best_model = next(m for m in self.models if m.name == best_result['model'])

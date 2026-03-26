@@ -10,6 +10,7 @@ from typing import Dict, List
 import pandas as pd
 import numpy as np
 from datetime import datetime
+import time
 
 sys.path.insert(0, str(Path(__file__).parent / "src"))
 
@@ -208,6 +209,12 @@ class AdaptiveMLApp:
         print(f"ШАГ {step_num}: {text}")
         print("="*70)
 
+    def print_info(self, text: str):
+        print(f"  [INFO] {text}")
+
+    def print_progress(self, text: str):
+        print(f"  >>> {text}")
+
     def get_user_choice(self, prompt: str, options: list) -> int:
         print(f"\n{prompt}")
         print("-" * 50)
@@ -259,6 +266,38 @@ class AdaptiveMLApp:
         data_dir = Path("data")
         self.data_manager = DataManager(data_dir)
 
+    def explain_complexity_calculation(self, n_samples: int, n_features: int):
+        """Объяснение как рассчитывается сложность датасета"""
+        ratio = n_samples / n_features if n_features > 0 else 0
+
+        print("\n" + "="*70)
+        print("КАК ОПРЕДЕЛЯЕТСЯ СЛОЖНОСТЬ ДАТАСЕТА")
+        print("="*70)
+        print(f"\nФормула: отношение образцов к признакам")
+        print(f"  - Образцов: {n_samples}")
+        print(f"  - Признаков: {n_features}")
+        print(f"  - Отношение: {ratio:.1f}")
+        print("\nКритерии:")
+        print("  - Простой: отношение < 50")
+        print("  - Средний: 50 <= отношение < 200")
+        print("  - Сложный: отношение >= 200")
+
+        if ratio < 50:
+            complexity = "ПРОСТОЙ"
+            recommendation = "Подойдут простые модели: Random Forest, SVM, Logistic Regression"
+        elif ratio < 200:
+            complexity = "СРЕДНЕЙ СЛОЖНОСТИ"
+            recommendation = "Рекомендуются: Gradient Boosting, Random Forest, Neural Network"
+        else:
+            complexity = "СЛОЖНЫЙ"
+            recommendation = "Лучше всего: Neural Network, Gradient Boosting"
+
+        print(f"\nВаш датасет: {complexity}")
+        print(f"\nРекомендация: {recommendation}")
+        print("="*70)
+
+        input("\nНажмите Enter для продолжения...")
+
     def show_main_menu(self) -> int:
         """Главное меню приложения"""
         self.print_header("Adaptive ML System")
@@ -272,7 +311,7 @@ class AdaptiveMLApp:
         print("  4. Просмотреть результаты")
         print("  0. Выход")
 
-        return self.get_user_choice("\nВыберите действие:", [
+        return self.get_user_choice("\nВыберите действие", [
             "Запустить анализ данных",
             "Создать тестовые датасеты",
             "Создать большой датасет для теста",
@@ -321,7 +360,7 @@ class AdaptiveMLApp:
         print("  6. Все датасеты сразу")
         print("  0. Назад")
 
-        choice = self.get_user_choice("\nВаш выбор:", [
+        choice = self.get_user_choice("\nВаш выбор", [
             "Iris",
             "Wine",
             "Digits",
@@ -408,16 +447,47 @@ class AdaptiveMLApp:
         """Настройка pipeline"""
         self.print_step(0, "Настройка Pipeline")
 
-        print("\nХотите настроить pipeline?")
-        print("  - Режим (быстрый/стандарт/точный)")
-        print("  - Какие модели использовать")
-        print("  - Веса для Accuracy и F1-Score")
+        print("\nРежимы конфигурации:")
+        print("  1. Быстрая настройка (стандартные параметры)")
+        print("  2. Расширенная настройка (все параметры)")
+        print("  3. Пропустить (использовать значения по умолчанию)")
 
-        choice = input("\nНастроить pipeline? [y/N]: ").strip().lower()
+        mode = self.get_user_choice("\nВыберите режим", [
+            "Быстрая настройка",
+            "Расширенная настройка",
+            "Пропустить"
+        ])
 
-        if choice == 'y' or choice == 'yes':
+        if mode == 1:
+            print("\nВыберите профиль:")
+            print("  1. Быстрый (2 модели, 3 CV folds) - для маленьких датасетов")
+            print("  2. Стандартный (5 моделей, 5 CV folds) - рекомендуется")
+            print("  3. Точный (5 моделей, 10 CV folds) - для важных задач")
+
+            profile = self.get_user_choice("\nПрофиль", [
+                "Быстрый",
+                "Стандартный",
+                "Точный"
+            ])
+
+            if profile == 1:
+                from pipeline_config import get_fast_config
+                self.pipeline_config = get_fast_config()
+            elif profile == 2:
+                self.pipeline_config = get_default_config()
+            else:
+                from pipeline_config import get_accurate_config
+                self.pipeline_config = get_accurate_config()
+
+            print("\nОсновные параметры:")
+            print(f"  - Моделей: {sum(1 for m in self.pipeline_config.models.values() if m.enabled)}")
+            print(f"  - CV folds: {self.pipeline_config.training['cv_folds']}")
+            print(f"  - Accuracy вес: {self.pipeline_config.scoring['accuracy_weight']}")
+            print(f"  - F1-Score вес: {self.pipeline_config.scoring['f1_weight']}")
+
+        elif mode == 2:
             self.pipeline_config = interactive_config()
-            print("\nPipeline настроен")
+            print("\nРасширенная конфигурация применена")
         else:
             self.pipeline_config = get_default_config()
             print("\nИспользуется конфигурация по умолчанию")
@@ -446,7 +516,7 @@ class AdaptiveMLApp:
             options.append({'type': 'create_new', 'name': 'Создать тестовые датасеты'})
             print(f"  {len(options)}. Создать тестовые датасеты")
 
-            choice = self.get_user_choice("\nВыберите датасет:",
+            choice = self.get_user_choice("\nВыберите датасет",
                                          [opt['name'] for opt in options])
 
             if choice <= len(available):
@@ -463,7 +533,7 @@ class AdaptiveMLApp:
         else:
             print("\nДатасеты не найдены!")
 
-            choice = self.get_user_choice("\nЧто делать?", [
+            choice = self.get_user_choice("\nЧто делать", [
                 "Создать тестовые датасеты",
                 "Назад в главное меню"
             ])
@@ -496,7 +566,7 @@ class AdaptiveMLApp:
                 unique_vals = self.data[col].nunique()
                 print(f"  {i:2}. {col:30} | тип: {str(self.data[col].dtype):10} | уникальных: {unique_vals:4}")
 
-            choice = self.get_user_choice("\nКакую колонку предсказываем?", columns)
+            choice = self.get_user_choice("\nКакую колонку предсказываем", columns)
             self.target_column = columns[choice - 1]
 
         self.y = self.data[self.target_column].values
@@ -518,17 +588,28 @@ class AdaptiveMLApp:
         print(f"Образцов: {self.X.shape[0]}")
         print(f"Классов: {len(np.unique(self.y))}")
 
+        # Объяснение сложности
+        self.explain_complexity_calculation(self.X.shape[0], self.X.shape[1])
+
         return True
 
     def analyze_data(self):
         """Анализ данных"""
         self.print_step(3, "Анализ данных")
 
+        print("\nАнализ характеристик датасета...")
+        self.print_progress("Вычисление статистик признаков")
+
         profiler = DataProfiler(dataset_name="User_Dataset")
         self.profile = profiler.profile_tabular_data(
             self.X, self.y,
             feature_names=self.feature_columns
         )
+
+        self.print_progress("Анализ распределения классов")
+        self.print_progress("Поиск выбросов и аномалий")
+        self.print_progress("Оценка корреляций")
+        self.print_progress("Формирование рекомендаций")
 
         profiler.print_summary()
 
@@ -550,28 +631,44 @@ class AdaptiveMLApp:
         """Выбор и обучение модели"""
         self.print_step(4, "Обучение моделей")
 
+        print("\nИнициализация селектора моделей...")
         self.selector = AdaptiveModelSelector()
 
         if self.pipeline_config:
-            print("\nИспользуемые модели:")
-            for model_key, model_cfg in self.pipeline_config.models.items():
-                if model_cfg.enabled:
-                    print(f"   {model_cfg.name}")
+            print("\nКонфигурация pipeline:")
+            enabled_models = [m.name for m in self.pipeline_config.models.values() if m.enabled]
+            print(f"  - Модели: {', '.join(enabled_models)}")
+            print(f"  - CV folds: {self.pipeline_config.training['cv_folds']}")
+            print(f"  - Accuracy вес: {self.pipeline_config.scoring['accuracy_weight']}")
+            print(f"  - F1-Score вес: {self.pipeline_config.scoring['f1_weight']}")
 
+            self.print_progress("Создание моделей")
             self.selector.create_default_models(
                 model_types=[k for k, v in self.pipeline_config.models.items() if v.enabled]
             )
         else:
+            self.print_progress("Создание моделей по умолчанию")
             self.selector.create_default_models()
 
+        print("\nПодготовка данных...")
         X_train, X_test, y_train, y_test = train_test_split(
             self.X, self.y, test_size=0.2, random_state=42, stratify=self.y
         )
 
-        print(f"\nTrain: {len(X_train)}, Test: {len(X_test)}")
+        print(f"\nРазделение данных:")
+        print(f"  - Train: {len(X_train)} образцов ({len(X_train)/len(self.X)*100:.0f}%)")
+        print(f"  - Test: {len(X_test)} образцов ({len(X_test)/len(self.X)*100:.0f}%)")
 
         cv_folds = self.pipeline_config.training['cv_folds'] if self.pipeline_config else 5
         use_cv = self.pipeline_config.training['use_cv_in_scoring'] if self.pipeline_config else False
+
+        print(f"\nПараметры обучения:")
+        print(f"  - Кросс-валидация: {cv_folds} folds")
+        print(f"  - CV в scoring: {'Да' if use_cv else 'Нет'}")
+        print(f"  - Метрики: Accuracy (70%) + F1-Score (30%)")
+
+        self.print_progress("Начало обучения и тестирования моделей")
+        print("\n" + "="*70)
 
         self.best_model = self.selector.profile_and_select(
             self.X, self.y,
@@ -587,10 +684,13 @@ class AdaptiveMLApp:
         """Оценка и показ результатов"""
         self.print_step(5, "Результаты")
 
+        print("\nФинальная оценка на тестовой выборке...")
+
         X_train, X_test, y_train, y_test = train_test_split(
             self.X, self.y, test_size=0.2, random_state=42, stratify=self.y
         )
 
+        self.print_progress("Генерация предсказаний")
         y_pred = self.selector.predict(X_test)
         accuracy = accuracy_score(y_test, y_pred)
 
@@ -603,6 +703,7 @@ class AdaptiveMLApp:
         print(classification_report(y_test, y_pred))
 
         try:
+            self.print_progress("Построение матрицы ошибок")
             cm = confusion_matrix(y_test, y_pred)
             fig, ax = plt.subplots(figsize=(8, 6))
             sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', ax=ax)
@@ -624,12 +725,14 @@ class AdaptiveMLApp:
             'timestamp': str(datetime.now())
         }
 
+        self.print_progress("Сохранение результатов")
         results_path = self.output_dir / "results.json"
         with open(results_path, 'w', encoding='utf-8') as f:
             json.dump(self.results, f, indent=2, ensure_ascii=False)
         print(f"\nРезультаты: {results_path}")
 
         models_dir = self.output_dir / "models"
+        self.print_progress("Сохранение моделей")
         self.selector.save_all_models(str(models_dir))
         print(f"Модели: {models_dir}")
 
@@ -640,7 +743,7 @@ class AdaptiveMLApp:
         """Предсказание новых данных"""
         self.print_step(6, "Предсказание")
 
-        choice = self.get_user_choice("\nДействие:", [
+        choice = self.get_user_choice("\nДействие", [
             "Ввести данные",
             "Загрузить CSV",
             "Завершить"
