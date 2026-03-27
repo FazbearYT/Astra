@@ -25,6 +25,8 @@ warnings.filterwarnings('ignore')
 os.environ['OMP_NUM_THREADS'] = str(os.cpu_count())
 os.environ['OPENBLAS_NUM_THREADS'] = str(os.cpu_count())
 os.environ['MKL_NUM_THREADS'] = str(os.cpu_count())
+os.environ['NUMEXPR_NUM_THREADS'] = str(os.cpu_count())
+os.environ['MKL_DYNAMIC'] = 'FALSE'
 
 
 class SpecializedModel:
@@ -80,7 +82,7 @@ class SpecializedModel:
         return results
 
     def cross_validate(self, X: np.ndarray, y: np.ndarray, cv: int = 5) -> Dict[str, float]:
-        scores = cross_val_score(self.model, X, y, cv=cv, scoring='accuracy', n_jobs=1)
+        scores = cross_val_score(self.model, X, y, cv=cv, scoring='accuracy', n_jobs=-1)
         return {
             'cv_mean': float(scores.mean()),
             'cv_std': float(scores.std()),
@@ -258,7 +260,8 @@ class AdaptiveModelSelector:
                         max_iter=1000,
                         random_state=42,
                         C=1.0,
-                        solver='lbfgs'
+                        solver='lbfgs',
+                        n_jobs=-1
                     ))
                 ]),
                 profile_requirements={

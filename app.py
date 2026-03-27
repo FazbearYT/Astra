@@ -25,7 +25,6 @@ from pipeline_config import PipelineConfig, get_default_config, get_fast_config,
 from progress import get_progress_bar, progress_range, progress_context
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
-from sklearn.preprocessing import LabelEncoder
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
@@ -474,33 +473,17 @@ class AdaptiveMLApp:
             choice = self.get_user_choice("\nКакую колонку предсказываем", columns)
             self.target_column = columns[choice - 1]
 
-        before = len(self.data)
-        self.data = self.data.dropna(subset=[self.target_column])
-        if len(self.data) < before:
-            print(f"Удалено {before - len(self.data)} строк с пропущенной целевой переменной")
-
         self.y = self.data[self.target_column].values
-
-        if not np.issubdtype(self.y.dtype, np.number):
-            le = LabelEncoder()
-            self.y = le.fit_transform(self.y)
-            print(f"Целевая переменная преобразована в числа (классы: {le.classes_})")
 
         all_feature_cols = [col for col in self.data.columns if col != self.target_column]
 
         self.feature_columns = []
         for col in all_feature_cols:
             if pd.api.types.is_numeric_dtype(self.data[col]):
-                # Заполняем пропуски средним для числовых признаков
-                if self.data[col].isnull().any():
-                    mean_val = self.data[col].mean()
-                    self.data[col].fillna(mean_val, inplace=True)
                 self.feature_columns.append(col)
-            else:
-                print(f"Столбец '{col}' пропущен (не числовой)")
 
         if len(self.feature_columns) == 0:
-            print("Нет числовых колонок для признаков!")
+            print("Нет числовых колонок!")
             return False
 
         self.X = self.data[self.feature_columns].values
@@ -644,10 +627,6 @@ class AdaptiveMLApp:
             if Path(filepath).exists():
                 try:
                     new_data = pd.read_csv(filepath)
-                    missing_cols = set(self.feature_columns) - set(new_data.columns)
-                    if missing_cols:
-                        print(f"В файле отсутствуют столбцы: {missing_cols}")
-                        return False
                     new_x = new_data[self.feature_columns].values
                     predictions = self.selector.predict(new_x)
                     new_data['prediction'] = predictions
