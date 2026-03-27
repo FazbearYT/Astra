@@ -1,42 +1,170 @@
+"""
+Adaptive ML System - Единая точка входа
+"""
+
 import sys
 import os
 from pathlib import Path
 import json
+from typing import Dict, List
 import pandas as pd
 import numpy as np
 from datetime import datetime
+import time
+
+os.environ['OMP_NUM_THREADS'] = str(os.cpu_count())
+os.environ['OPENBLAS_NUM_THREADS'] = str(os.cpu_count())
+os.environ['MKL_NUM_THREADS'] = str(os.cpu_count())
+os.environ['NUMEXPR_NUM_THREADS'] = str(os.cpu_count())
 
 sys.path.insert(0, str(Path(__file__).parent / "src"))
 
 from model_profiler import DataProfiler
 from model_selector import AdaptiveModelSelector
+from pipeline_config import PipelineConfig, get_default_config, get_fast_config, get_accurate_config, interactive_config
+from progress import get_progress_bar, progress_range, progress_context
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
+from sklearn.preprocessing import LabelEncoder
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import seaborn as sns
 
 
-def create_quick_test_dataset():
-    print("\nСоздание тестового датасета Iris...")
+class DataManager:
+    def __init__(self, data_dir: Path):
+        self.data_dir = data_dir
+        self.tabular_dir = data_dir / "tabular"
+        self.tabular_dir.mkdir(parents=True, exist_ok=True)
 
-    tabular_dir = Path("data/tabular")
-    tabular_dir.mkdir(parents=True, exist_ok=True)
+    def create_iris_dataset(self) -> Path:
+        from sklearn.datasets import load_iris
 
-    from sklearn.datasets import load_iris
-    iris = load_iris()
-    df = pd.DataFrame(iris.data, columns=iris.feature_names)
-    df['target'] = iris.target
-    df['target_name'] = df['target'].map({0: 'setosa', 1: 'versicolor', 2: 'virginica'})
+        iris = load_iris()
+        df = pd.DataFrame(iris.data, columns=iris.feature_names)
+        df['target'] = iris.target
+        df['target_name'] = df['target'].map({0: 'setosa', 1: 'versicolor', 2: 'virginica'})
 
-    filepath = tabular_dir / "iris_auto.csv"
-    df.to_csv(filepath, index=False, encoding='utf-8')
+        filepath = self.tabular_dir / "iris.csv"
+        df.to_csv(filepath, index=False, encoding='utf-8')
 
-    print(f"   ✅ Создан: {filepath}")
-    print(f"   {len(df)} строк, {len(df.columns)} колонок")
+        return filepath
 
-    return filepath
+    def create_wine_dataset(self) -> Path:
+        from sklearn.datasets import load_wine
+
+        wine = load_wine()
+        df = pd.DataFrame(wine.data, columns=wine.feature_names)
+        df['target'] = wine.target
+        df['target_name'] = df['target'].map({0: 'class_0', 1: 'class_1', 2: 'class_2'})
+
+        filepath = self.tabular_dir / "wine.csv"
+        df.to_csv(filepath, index=False, encoding='utf-8')
+
+        return filepath
+
+    def create_digits_dataset(self) -> Path:
+        from sklearn.datasets import load_digits
+
+        digits = load_digits()
+        df = pd.DataFrame(digits.data, columns=[f'pixel_{i}' for i in range(64)])
+        df['target'] = digits.target
+
+        filepath = self.tabular_dir / "digits.csv"
+        df.to_csv(filepath, index=False, encoding='utf-8')
+
+        return filepath
+
+    def create_titanic_dataset(self) -> Path:
+        np.random.seed(42)
+        n = 891
+
+        df = pd.DataFrame({
+            'pclass': np.random.randint(1, 4, n),
+            'gender': np.random.randint(0, 2, n),
+            'age': np.random.normal(30, 14, n).clip(0, 80),
+            'sibsp': np.random.poisson(0.5, n),
+            'parch': np.random.poisson(0.4, n),
+            'fare': np.random.exponential(30, n),
+        })
+        df['target'] = ((df['gender'] == 1) & (df['pclass'] < 3) |
+                       (df['age'] < 10)).astype(int)
+
+        filepath = self.tabular_dir / "titanic.csv"
+        df.to_csv(filepath, index=False, encoding='utf-8')
+
+        return filepath
+
+    def create_synthetic_dataset(self) -> Path:
+        from sklearn.datasets import make_blobs
+
+        np.random.seed(42)
+        X, y = make_blobs(n_samples=500, n_features=5, centers=3,
+                         cluster_std=1.5, random_state=42)
+
+        df = pd.DataFrame(X, columns=[f'feature_{i}' for i in range(5)])
+        df['target'] = y
+        df['target_name'] = df['target'].map({0: 'class_A', 1: 'class_B', 2: 'class_C'})
+
+        filepath = self.tabular_dir / "synthetic.csv"
+        df.to_csv(filepath, index=False, encoding='utf-8')
+
+        return filepath
+
+    def create_large_dataset(self) -> Path:
+        from sklearn.datasets import make_classification
+
+        print("\nГенерация большого датасета (100,000 строк)...")
+
+        X, y = make_classification(
+            n_samples=100000,
+            n_features=20,
+            n_informative=15,
+            n_redundant=5,
+            n_classes=5,
+            n_clusters_per_class=2,
+            random_state=42
+        )
+
+        df = pd.DataFrame(X, columns=[f'feature_{i}' for i in range(20)])
+        df['target'] = y
+
+        filepath = self.tabular_dir / "large_test.csv"
+        df.to_csv(filepath, index=False, encoding='utf-8')
+
+        return filepath
+
+    def auto_detect_datasets(self) -> List[Dict]:
+        available = []
+
+        if self.tabular_dir.exists():
+            for csv_file in self.tabular_dir.glob("*.csv"):
+                try:
+                    df = pd.read_csv(csv_file)
+                    available.append({
+                        'name': csv_file.stem,
+                        'path': csv_file,
+                        'rows': len(df),
+                        'cols': len(df.columns)
+                    })
+                except Exception:
+                    pass
+
+        return available
+
+    def load_dataset(self, filepath: Path) -> pd.DataFrame:
+        return pd.read_csv(filepath)
+
+    def create_all_test_datasets(self) -> List[Path]:
+        paths = []
+        paths.append(self.create_iris_dataset())
+        paths.append(self.create_wine_dataset())
+        paths.append(self.create_digits_dataset())
+        paths.append(self.create_titanic_dataset())
+        paths.append(self.create_synthetic_dataset())
+
+        return paths
 
 
 class AdaptiveMLApp:
@@ -45,41 +173,30 @@ class AdaptiveMLApp:
         self.X = None
         self.y = None
         self.target_column = None
-        self.feature_columns = None  # Только numeric колонки
+        self.feature_columns = None
         self.profile = None
         self.selector = None
         self.best_model = None
         self.results = {}
         self.output_dir = None
         self.session_id = None
+        self.pipeline_config = None
+        self.data_manager = None
 
     def clear_screen(self):
         os.system('cls' if os.name == 'nt' else 'clear')
 
     def print_header(self, title: str):
         self.clear_screen()
-        print("="*70)
-        print(f"{title.upper()}")
-        print("="*70)
-        print()
+        print(title.upper())
+        print("-" * 40)
 
     def print_step(self, step_num: int, text: str):
-        print(f"\n{'='*70}")
-        print(f"ШАГ {step_num}: {text}")
-        print("="*70)
-
-    def print_success(self, text: str):
-        print(f"  ✅ {text}")
-
-    def print_error(self, text: str):
-        print(f"  ❌ {text}")
-
-    def print_info(self, text: str):
-        print(f"  ℹ️  {text}")
+        print(f"\nШаг {step_num}: {text}")
+        print("-" * 40)
 
     def get_user_choice(self, prompt: str, options: list) -> int:
         print(f"\n{prompt}")
-        print("-" * 50)
 
         for i, option in enumerate(options, 1):
             print(f"  {i}. {option}")
@@ -88,18 +205,18 @@ class AdaptiveMLApp:
 
         while True:
             try:
-                choice = int(input(f"\n👉 Ваш выбор (0-{len(options)}): "))
+                choice = int(input(f"\nВаш выбор (0-{len(options)}): "))
                 if choice == 0:
-                    print("\n👋 Программа завершена")
+                    print("\nПрограмма завершена")
                     sys.exit(0)
                 elif 1 <= choice <= len(options):
                     return choice
                 else:
-                    print(f"❌ Введите число от 0 до {len(options)}")
+                    print(f"Введите число от 0 до {len(options)}")
             except ValueError:
-                print("❌ Введите корректное число")
+                print("Введите корректное число")
             except KeyboardInterrupt:
-                print("\n\n👋 Программа завершена")
+                print("\n\nПрограмма завершена")
                 sys.exit(0)
 
     def setup_output_directory(self):
@@ -120,188 +237,287 @@ class AdaptiveMLApp:
         (self.output_dir / "models").mkdir(exist_ok=True)
         (self.output_dir / "visualizations").mkdir(exist_ok=True)
 
-        print(f"\n📂 Результаты: {self.output_dir}")
+        print(f"Результаты: {self.output_dir}")
         return self.output_dir
 
-    def auto_detect_datasets(self):
-        """Автоматическое обнаружение датасетов"""
-        print("\n🔍 Поиск датасетов...")
+    def initialize_data_manager(self):
+        data_dir = Path("data")
+        self.data_manager = DataManager(data_dir)
 
-        available = []
+    def show_main_menu(self) -> int:
+        self.print_header("Adaptive ML System")
 
-        tabular_dir = Path("data/tabular")
-        if tabular_dir.exists():
-            for csv_file in tabular_dir.glob("*.csv"):
-                try:
-                    df = pd.read_csv(csv_file)
-                    available.append({
-                        'type': 'tabular',
-                        'name': csv_file.stem,
-                        'path': csv_file,
-                        'rows': len(df),
-                        'cols': len(df.columns)
-                    })
-                    print(f"   ✅ {csv_file.name} ({len(df)} строк)")
-                except:
-                    pass
+        print("Автоматический выбор ML моделей\n")
+        print("МЕНЮ:")
 
-        return available
+        return self.get_user_choice("\nВыберите действие", [
+            "Запустить анализ данных",
+            "Создать тестовые датасеты",
+            "Просмотреть результаты"
+        ])
 
-    def load_iris_builtin(self):
-        """Загрузка встроенного Iris"""
-        print("\nЗагрузка Iris Dataset...")
-
-        from sklearn.datasets import load_iris
-        iris = load_iris()
-
-        self.data = pd.DataFrame(iris.data, columns=iris.feature_names)
-        self.data['target'] = iris.target
-        self.data['target_name'] = self.data['target'].map({
-            0: 'setosa', 1: 'versicolor', 2: 'virginica'
-        })
-
-        self.target_column = 'target_name'
-        self.print_success("Iris Dataset загружен")
-        return True
-
-    def load_csv_file(self, filepath: Path):
-        print(f"\nЗагрузка {filepath.name}...")
-
+    def run_data_analysis(self):
         try:
-            self.data = pd.read_csv(filepath)
-            self.print_success(f"Загружено {len(self.data)} строк")
+            self.setup_output_directory()
 
-            # Автопоиск target
-            target_candidates = ['target', 'class', 'label', 'category',
-                               'target_name', 'flower_name', 'species']
+            if not self.configure_pipeline():
+                return False
+            if not self.load_data():
+                return False
+            if not self.select_target_column():
+                return False
+            if not self.analyze_data():
+                return False
+            if not self.select_and_train_model():
+                return False
+            if not self.evaluate_and_show_results():
+                return False
+            if not self.predict_new_data():
+                return False
 
-            for col in target_candidates:
-                if col in self.data.columns:
-                    self.target_column = col
-                    print(f"Найдена target колонка: {col}")
-                    break
-
-            if self.target_column is None:
-                print("\nКолонки:")
-                for i, col in enumerate(self.data.columns, 1):
-                    print(f"   {i}. {col}")
-
-                choice = int(input(f"\n👉 Выберите target (1-{len(self.data.columns)}): "))
-                self.target_column = self.data.columns[choice - 1]
-
+            self.show_summary()
             return True
 
         except Exception as e:
-            self.print_error(f"Ошибка: {e}")
+            print(f"\nОшибка: {e}")
+            import traceback
+            traceback.print_exc()
             return False
+
+    def create_test_datasets_menu(self):
+        self.print_header("Создание тестовых датасетов")
+
+        print("Выберите датасет:")
+        print("  1. Iris (150 строк)")
+        print("  2. Wine (178 строк)")
+        print("  3. Digits (1797 строк)")
+        print("  4. Titanic (891 строк)")
+        print("  5. Synthetic (500 строк)")
+        print("  6. Все датасеты")
+        print("  7. Большой датасет (100K строк)")
+        print("  0. Назад")
+
+        choice = self.get_user_choice("\nВаш выбор", [
+            "Iris",
+            "Wine",
+            "Digits",
+            "Titanic",
+            "Synthetic",
+            "Все датасеты",
+            "Большой датасет"
+        ])
+
+        if choice == 1:
+            path = self.data_manager.create_iris_dataset()
+            print(f"Создан: {path}")
+        elif choice == 2:
+            path = self.data_manager.create_wine_dataset()
+            print(f"Создан: {path}")
+        elif choice == 3:
+            path = self.data_manager.create_digits_dataset()
+            print(f"Создан: {path}")
+        elif choice == 4:
+            path = self.data_manager.create_titanic_dataset()
+            print(f"Создан: {path}")
+        elif choice == 5:
+            path = self.data_manager.create_synthetic_dataset()
+            print(f"Создан: {path}")
+        elif choice == 6:
+            paths = self.data_manager.create_all_test_datasets()
+            print(f"Создано {len(paths)} датасетов")
+        elif choice == 7:
+            path = self.data_manager.create_large_dataset()
+            print(f"Создан: {path}")
+
+        input("\nНажмите Enter для продолжения...")
+
+    def view_results_menu(self):
+        self.print_header("Просмотр результатов")
+
+        outputs_dir = Path("outputs")
+
+        if not outputs_dir.exists():
+            print("Нет результатов")
+            input("\nНажмите Enter для продолжения...")
+            return
+
+        runs = sorted([d for d in outputs_dir.iterdir()
+                      if d.is_dir() and d.name.startswith("run_")])
+
+        if not runs:
+            print("Нет результатов")
+            input("\nНажмите Enter для продолжения...")
+            return
+
+        print(f"Найдено сессий: {len(runs)}")
+        print("\nПоследние сессии:")
+
+        for run in runs[-5:]:
+            results_file = run / "results.json"
+            if results_file.exists():
+                with open(results_file, 'r') as f:
+                    results = json.load(f)
+                print(f"  {run.name}: {results['best_model']} ({results['accuracy']:.4f})")
+
+        input("\nНажмите Enter для продолжения...")
+
+    def configure_pipeline(self):
+        self.print_step(0, "Настройка Pipeline")
+
+        print("Режим конфигурации:")
+        print("  1. Быстрая настройка")
+        print("  2. Расширенная настройка")
+        print("  3. Пропустить (по умолчанию)")
+
+        mode = self.get_user_choice("\nВыберите режим", [
+            "Быстрая настройка",
+            "Расширенная настройка",
+            "Пропустить"
+        ])
+
+        if mode == 1:
+            print("\nПрофиль:")
+            print("  1. Быстрый (2 модели, 3 CV)")
+            print("  2. Стандартный (5 моделей, 5 CV)")
+            print("  3. Точный (5 моделей, 10 CV)")
+
+            profile = self.get_user_choice("\nПрофиль", [
+                "Быстрый",
+                "Стандартный",
+                "Точный"
+            ])
+
+            if profile == 1:
+                self.pipeline_config = get_fast_config()
+            elif profile == 2:
+                self.pipeline_config = get_default_config()
+            else:
+                self.pipeline_config = get_accurate_config()
+
+            print(f"\nМоделей: {sum(1 for m in self.pipeline_config.models.values() if m.enabled)}")
+            print(f"CV folds: {self.pipeline_config.training['cv_folds']}")
+
+        elif mode == 2:
+            self.pipeline_config = interactive_config()
+        else:
+            self.pipeline_config = get_default_config()
+
+        config_path = self.output_dir / "pipeline_config.json"
+        self.pipeline_config.save(str(config_path))
+
+        return True
 
     def load_data(self):
         self.print_step(1, "Загрузка данных")
 
-        available = self.auto_detect_datasets()
+        available = self.data_manager.auto_detect_datasets()
 
         if available:
-            print("\n" + "="*70)
-            print("📂 НАЙДЕНЫ ДАТАСЕТЫ")
-            print("="*70)
+            print("\nНайдены датасеты:")
 
             options = []
             for i, ds in enumerate(available, 1):
-                print(f"   {i}. {ds['name']} ({ds['rows']} строк)")
+                print(f"  {i}. {ds['name']} ({ds['rows']} строк)")
                 options.append(ds)
 
-            options.append({'type': 'builtin_iris', 'name': 'Iris Dataset (встроенный)'})
-            print(f"   {len(options)}. Iris Dataset (встроенный)")
-            options.append({'type': 'create_test', 'name': 'Создать тестовый датасет Iris (150 строк)'})
-            print(f"   {len(options)}. Создать тестовый датасет Iris (150 строк)")
+            options.append({'type': 'create_new', 'name': 'Создать тестовые датасеты'})
+            print(f"  {len(options)}. Создать тестовые датасеты")
 
-            choice = self.get_user_choice("\nВыберите датасет:",
+            choice = self.get_user_choice("\nВыберите датасет",
                                          [opt['name'] for opt in options])
 
-            selected = options[choice - 1]
+            if choice <= len(available):
+                selected = options[choice - 1]
+                self.data = self.data_manager.load_dataset(selected['path'])
+                print(f"Загружено {len(self.data)} строк")
+                return True
+            elif choice == len(options):
+                self.create_test_datasets_menu()
+                return self.load_data()
 
-            if selected['type'] == 'builtin_iris':
-                return self.load_iris_builtin()
-            elif selected['type'] == 'create_test':
-                filepath = create_quick_test_dataset()
-                return self.load_csv_file(filepath)
-            else:
-                return self.load_csv_file(selected['path'])
+            return False
 
         else:
-            print("\n⚠️  Датасеты не найдены в data/tabular/")
+            print("Датасеты не найдены!")
 
-            choice = self.get_user_choice("\nЧто делать?", [
-                "Создать тестовый датасет Iris (150 строк)",
-                "Загрузить встроенный Iris Dataset",
-                "Положить CSV в data/tabular/ и перезапустить"
+            choice = self.get_user_choice("\nЧто делать", [
+                "Создать тестовые датасеты",
+                "Назад в главное меню"
             ])
 
             if choice == 1:
-                filepath = create_quick_test_dataset()
-                return self.load_csv_file(filepath)
-            elif choice == 2:
-                return self.load_iris_builtin()
+                self.create_test_datasets_menu()
+                return self.load_data()
             else:
-                print("\n💡 Положите CSV файл в папку data/tabular/")
-                print("   Затем перезапустите программу")
                 return False
 
     def select_target_column(self):
         self.print_step(2, "Целевая переменная")
 
-        if self.target_column and self.target_column in self.data.columns:
-            print(f"\n✅ Выбрана: {self.target_column}")
-        else:
+        target_candidates = ['target', 'class', 'label', 'category',
+                           'target_name', 'flower_name', 'species']
+
+        for col in target_candidates:
+            if col in self.data.columns:
+                self.target_column = col
+                print(f"Найдена target колонка: {col}")
+                break
+
+        if self.target_column is None:
             columns = list(self.data.columns)
-            print("\nКолонки:")
 
             for i, col in enumerate(columns, 1):
                 sample = self.data[col].iloc[0] if len(self.data) > 0 else "N/A"
                 unique_vals = self.data[col].nunique()
-                print(f"  {i:2}. {col:30} | тип: {str(self.data[col].dtype):10} | уникальных: {unique_vals:4}")
+                print(f"  {i:2}. {col:30} | тип: {str(self.data[col].dtype):10}")
 
-            choice = self.get_user_choice("\nКакую предсказываем?", columns)
+            choice = self.get_user_choice("\nКакую колонку предсказываем", columns)
             self.target_column = columns[choice - 1]
 
-        # 🔧 ИСПРАВЛЕНИЕ: Выбираем ТОЛЬКО numeric колонки для X
+        before = len(self.data)
+        self.data = self.data.dropna(subset=[self.target_column])
+        if len(self.data) < before:
+            print(f"Удалено {before - len(self.data)} строк с пропущенной целевой переменной")
+
         self.y = self.data[self.target_column].values
 
-        # Выбираем все колонки кроме target
+        if not np.issubdtype(self.y.dtype, np.number):
+            le = LabelEncoder()
+            self.y = le.fit_transform(self.y)
+            print(f"Целевая переменная преобразована в числа (классы: {le.classes_})")
+
         all_feature_cols = [col for col in self.data.columns if col != self.target_column]
 
-        # Фильтруем только numeric
         self.feature_columns = []
         for col in all_feature_cols:
             if pd.api.types.is_numeric_dtype(self.data[col]):
+                # Заполняем пропуски средним для числовых признаков
+                if self.data[col].isnull().any():
+                    mean_val = self.data[col].mean()
+                    self.data[col].fillna(mean_val, inplace=True)
                 self.feature_columns.append(col)
             else:
-                print(f"  ⚠️  Пропущена нечисловая колонка: {col} ({self.data[col].dtype})")
+                print(f"Столбец '{col}' пропущен (не числовой)")
 
         if len(self.feature_columns) == 0:
-            self.print_error("Нет числовых колонок для обучения!")
+            print("Нет числовых колонок для признаков!")
             return False
 
         self.X = self.data[self.feature_columns].values
 
-        print(f"\nПризнаков (numeric): {len(self.feature_columns)}")
-        print(f"   Колонки: {', '.join(self.feature_columns)}")
-        print(f"   Образцов: {self.X.shape[0]}")
-        print(f"   Классов: {len(np.unique(self.y))}")
+        print(f"Признаков: {len(self.feature_columns)}")
+        print(f"Образцов: {self.X.shape[0]}")
+        print(f"Классов: {len(np.unique(self.y))}")
 
         return True
 
     def analyze_data(self):
-        """Анализ"""
         self.print_step(3, "Анализ данных")
-
-        print("\n🔍 Анализ данных...")
 
         profiler = DataProfiler(dataset_name="User_Dataset")
         self.profile = profiler.profile_tabular_data(
-            self.X,
-            self.y,
-            feature_names=self.feature_columns  # 🔧 Используем только numeric колонки
+            self.X, self.y,
+            feature_names=self.feature_columns
         )
 
         profiler.print_summary()
@@ -313,38 +529,48 @@ class AdaptiveMLApp:
             viz_path = self.output_dir / "visualizations" / "data_profile.png"
             profiler.visualize_profile(save_path=str(viz_path))
             plt.close('all')
-            self.print_success(f"График: {viz_path}")
+            print(f"График: {viz_path}")
         except Exception as e:
-            print(f"  ⚠️  Ошибка визуализации: {e}")
+            print(f"Ошибка визуализации: {e}")
 
-        input("\n👉 Enter...")
         return True
 
     def select_and_train_model(self):
-        """Выбор модели"""
         self.print_step(4, "Обучение моделей")
 
         self.selector = AdaptiveModelSelector()
-        self.selector.create_default_models()
+
+        if self.pipeline_config:
+            print("Конфигурация:")
+            enabled_models = [m.name for m in self.pipeline_config.models.values() if m.enabled]
+            print(f"  Модели: {', '.join(enabled_models)}")
+            print(f"  CV folds: {self.pipeline_config.training['cv_folds']}")
+
+            self.selector.create_default_models(
+                model_types=[k for k, v in self.pipeline_config.models.items() if v.enabled]
+            )
+        else:
+            self.selector.create_default_models()
 
         X_train, X_test, y_train, y_test = train_test_split(
             self.X, self.y, test_size=0.2, random_state=42, stratify=self.y
         )
 
-        print(f"\nTrain: {len(X_train)}, Test: {len(X_test)}")
+        print(f"Train: {len(X_train)}, Test: {len(X_test)}")
+
+        cv_folds = self.pipeline_config.training['cv_folds'] if self.pipeline_config else 5
+        use_cv = self.pipeline_config.training['use_cv_in_scoring'] if self.pipeline_config else False
 
         self.best_model = self.selector.profile_and_select(
             self.X, self.y,
             data_profile=self.profile.to_dict(),
-            cv_folds=5
+            cv_folds=cv_folds,
+            use_cv_in_scoring=use_cv
         )
 
-        print(f"\n✅ Лучшая: {self.best_model.name}")
-        input("\n👉 Enter...")
         return True
 
     def evaluate_and_show_results(self):
-        """Результаты"""
         self.print_step(5, "Результаты")
 
         X_train, X_test, y_train, y_test = train_test_split(
@@ -354,12 +580,8 @@ class AdaptiveMLApp:
         y_pred = self.selector.predict(X_test)
         accuracy = accuracy_score(y_test, y_pred)
 
-        print("\n" + "="*70)
-        print("ИТОГИ")
-        print("="*70)
-        print(f"\n🥇 Лучшая модель: {self.best_model.name}")
+        print(f"\nМодель: {self.best_model.name}")
         print(f"Точность: {accuracy:.4f} ({accuracy*100:.2f}%)")
-        print(f"\nОтчет:")
         print(classification_report(y_test, y_pred))
 
         try:
@@ -370,9 +592,9 @@ class AdaptiveMLApp:
             cm_path = self.output_dir / "visualizations" / "confusion_matrix.png"
             plt.savefig(str(cm_path), dpi=300, bbox_inches='tight')
             plt.close('all')
-            self.print_success(f"Matrix: {cm_path}")
+            print(f"Матрица ошибок: {cm_path}")
         except Exception as e:
-            print(f"  ⚠️  Ошибка: {e}")
+            print(f"Ошибка: {e}")
 
         self.results = {
             'session_id': self.session_id,
@@ -387,101 +609,83 @@ class AdaptiveMLApp:
         results_path = self.output_dir / "results.json"
         with open(results_path, 'w', encoding='utf-8') as f:
             json.dump(self.results, f, indent=2, ensure_ascii=False)
-        self.print_success(f"Results: {results_path}")
+        print(f"Результаты: {results_path}")
 
         models_dir = self.output_dir / "models"
         self.selector.save_all_models(str(models_dir))
-        self.print_success(f"Models: {models_dir}")
+        print(f"Модели: {models_dir}")
 
-        input("\n👉 Enter...")
         return True
 
     def predict_new_data(self):
         self.print_step(6, "Предсказание")
 
-        choice = self.get_user_choice("\nДействие:", [
+        choice = self.get_user_choice("\nДействие", [
             "Ввести данные",
             "Загрузить CSV",
             "Завершить"
         ])
 
         if choice == 1:
-            print(f"\n📝 Введите {len(self.feature_columns)} значений ({', '.join(self.feature_columns)}):")
+            print(f"Введите {len(self.feature_columns)} значений:")
             try:
-                values = [float(v) for v in input("👉 > ").strip().replace(',', ' ').split()]
+                values = [float(v) for v in input("> ").strip().replace(',', ' ').split()]
                 if len(values) != len(self.feature_columns):
-                    print(f"❌ Ожидалось {len(self.feature_columns)} значений")
+                    print(f"Ожидалось {len(self.feature_columns)}")
                     return False
 
                 prediction = self.selector.predict(np.array([values]))[0]
-                print(f"\n✅ Класс: {prediction}")
+                print(f"Класс: {prediction}")
             except Exception as e:
-                print(f"❌ Ошибка: {e}")
+                print(f"Ошибка: {e}")
 
         elif choice == 2:
-            filepath = input("\n📂 CSV путь: ").strip()
+            filepath = input("CSV путь: ").strip()
             if Path(filepath).exists():
                 try:
                     new_data = pd.read_csv(filepath)
-                    # 🔧 Используем только numeric колонки
-                    new_X = new_data[self.feature_columns].values
-                    predictions = self.selector.predict(new_X)
+                    missing_cols = set(self.feature_columns) - set(new_data.columns)
+                    if missing_cols:
+                        print(f"В файле отсутствуют столбцы: {missing_cols}")
+                        return False
+                    new_x = new_data[self.feature_columns].values
+                    predictions = self.selector.predict(new_x)
                     new_data['prediction'] = predictions
                     output_path = self.output_dir / "predictions.csv"
                     new_data.to_csv(output_path, index=False)
-                    self.print_success(f"Saved: {output_path}")
+                    print(f"Предсказания: {output_path}")
                 except Exception as e:
-                    print(f"❌ Ошибка: {e}")
+                    print(f"Ошибка: {e}")
 
         return True
 
     def show_summary(self):
         self.print_header("Готово!")
-        print("✅ Успешно!")
-        print(f"\n📂 {self.output_dir}")
-        print(f"🏆 {self.best_model.name}")
+        print(f"Модель: {self.best_model.name}")
         print(f"Accuracy: {self.results['accuracy']*100:.2f}%")
-        print(f"\noutputs/latest/")
+        print(f"\nРезультаты: {self.output_dir}")
 
     def run(self):
-        try:
-            self.print_header("Adaptive ML System")
-            print("Автоматический выбор ML моделей")
-            print()
-            print("📋 Как использовать:")
-            print("   1. Положите CSV в data/tabular/")
-            print("   2. ИЛИ создайте тестовый датасет")
-            print("   3. ИЛИ используйте встроенный Iris")
-            print("   DEVELOP TRICK: try scripts/download_all_datasets.py to get more data for tests")
-            print()
-            input(" Нажмите Enter для начала...")
+        self.initialize_data_manager()
 
-            self.setup_output_directory()
+        while True:
+            choice = self.show_main_menu()
 
-            if not self.load_data(): return False
-            if not self.select_target_column(): return False
-            if not self.analyze_data(): return False
-            if not self.select_and_train_model(): return False
-            if not self.evaluate_and_show_results(): return False
-            if not self.predict_new_data(): return False
-
-            self.show_summary()
-            return True
-
-        except KeyboardInterrupt:
-            print("\n\n👋 Завершено")
-            return False
-        except Exception as e:
-            print(f"\n❌ Ошибка: {e}")
-            import traceback
-            traceback.print_exc()
-            return False
+            if choice == 1:
+                self.run_data_analysis()
+                input("\nНажмите Enter для продолжения...")
+            elif choice == 2:
+                self.create_test_datasets_menu()
+            elif choice == 3:
+                self.view_results_menu()
+            elif choice == 0:
+                print("\nПрограмма завершена")
+                break
 
 
 def main():
     app = AdaptiveMLApp()
-    success = app.run()
-    sys.exit(0 if success else 1)
+    app.run()
 
 
 if __name__ == "__main__":

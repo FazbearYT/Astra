@@ -1,7 +1,10 @@
+"""
+Модуль профилирования данных
+"""
+
 import numpy as np
 import pandas as pd
 import matplotlib
-
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import seaborn as sns
@@ -12,7 +15,6 @@ import os
 from dataclasses import dataclass, asdict
 from datetime import datetime
 import warnings
-
 warnings.filterwarnings('ignore')
 
 
@@ -53,7 +55,6 @@ class DatasetProfile:
     def save(self, filepath: str):
         with open(filepath, 'w', encoding='utf-8') as f:
             json.dump(self.to_dict(), f, indent=2, default=str)
-        print(f"✓ Профиль сохранен: {filepath}")
 
     @classmethod
     def load(cls, filepath: str) -> 'DatasetProfile':
@@ -63,13 +64,12 @@ class DatasetProfile:
 
 
 class DataProfiler:
-
     def __init__(self, dataset_name: str = "unknown"):
         self.dataset_name = dataset_name
         self.profile = None
 
     def profile_tabular_data(self, X: np.ndarray, y: Optional[np.ndarray] = None,
-                             feature_names: Optional[List[str]] = None) -> DatasetProfile:
+                            feature_names: Optional[List[str]] = None) -> DatasetProfile:
         if X.dtype == object or X.dtype.kind == 'U':
             X = X.astype(np.float64)
 
@@ -83,17 +83,17 @@ class DataProfiler:
         for i in range(n_features):
             feature = X[:, i]
 
-            std_val = float(np.std(feature))
+            std_val = float(np.std(feature)) if np.std(feature) != 0 else 1e-10
             mean_val = float(np.mean(feature))
 
             try:
                 skewness_val = float(stats.skew(feature))
-            except:
+            except Exception:
                 skewness_val = 0.0
 
             try:
                 kurtosis_val = float(stats.kurtosis(feature))
-            except:
+            except Exception:
                 kurtosis_val = 0.0
 
             profile = FeatureProfile(
@@ -114,7 +114,7 @@ class DataProfiler:
                 try:
                     corr, _ = stats.pearsonr(feature, y)
                     profile.correlation_with_target = float(corr)
-                except:
+                except Exception:
                     profile.correlation_with_target = None
 
             feature_profiles.append(profile)
@@ -135,10 +135,10 @@ class DataProfiler:
                 corr_matrix = np.corrcoef(X.T)
                 corr_matrix = np.nan_to_num(corr_matrix, nan=0.0)
                 corr_matrix = corr_matrix.tolist()
-            except:
+            except Exception:
                 corr_matrix = None
 
-        complexity = self._assess_complexity(X, y, n_samples, n_features)
+        complexity = self._assess_complexity(n_samples, n_features)
         recommended_models = self._recommend_models(complexity, class_balance_ratio)
         preprocessing_needs = self._detect_preprocessing_needs(X, feature_profiles)
 
@@ -170,8 +170,7 @@ class DataProfiler:
         upper_bound = Q3 + 1.5 * IQR
         return int(np.sum((feature < lower_bound) | (feature > upper_bound)))
 
-    def _assess_complexity(self, X: np.ndarray, y: Optional[np.ndarray],
-                           n_samples: int, n_features: int) -> str:
+    def _assess_complexity(self, n_samples: int, n_features: int) -> str:
         ratio = n_samples / n_features if n_features > 0 else 0
         if ratio < 50:
             return "simple"
@@ -187,7 +186,7 @@ class DataProfiler:
         elif complexity == "medium":
             recommendations.extend(["GradientBoosting", "RandomForest", "NeuralNetwork"])
         else:
-            recommendations.extend(["NeuralNetwork", "GradientBoosting", "XGBoost"])
+            recommendations.extend(["NeuralNetwork", "GradientBoosting"])
 
         if balance_ratio is not None and balance_ratio < 0.5:
             recommendations.append("BalancedRandomForest")
@@ -195,10 +194,9 @@ class DataProfiler:
         return list(set(recommendations))
 
     def _detect_preprocessing_needs(self, X: np.ndarray,
-                                    feature_profiles: List[FeatureProfile]) -> List[str]:
+                                   feature_profiles: List[FeatureProfile]) -> List[str]:
         needs = []
-
-        stds = [fp.std for fp in feature_profiles if fp.std > 0]
+        stds = [fp.std for fp in feature_profiles if fp.std > 1e-9]
 
         if len(stds) > 0:
             if max(stds) / min(stds) > 10:
@@ -219,15 +217,15 @@ class DataProfiler:
 
         return needs if needs else ["none_required"]
 
-    def visualize_profile(self, save_path: Optional[str] = None, show: bool = False):
+    def visualize_profile(self, save_path: Optional[str] = None):
         if self.profile is None:
-            raise ValueError("Сначала создайте профиль через profile_tabular_data()")
+            raise ValueError("Сначала создайте профиль")
 
         fig, axes = plt.subplots(2, 2, figsize=(14, 10))
         fig.suptitle(f'Профиль датасета: {self.dataset_name}', fontsize=16, fontweight='bold')
 
         axes[0, 0].hist([fp.mean for fp in self.profile.feature_profiles],
-                        bins=20, color='steelblue', alpha=0.7)
+                       bins=20, color='steelblue', alpha=0.7)
         axes[0, 0].set_title('Распределение средних значений признаков')
         axes[0, 0].set_xlabel('Среднее')
         axes[0, 0].set_ylabel('Частота')
@@ -262,10 +260,6 @@ class DataProfiler:
 
         if save_path:
             plt.savefig(save_path, dpi=300, bbox_inches='tight')
-            print(f"✓ Визуализация сохранена: {save_path}")
-
-        if show:
-            plt.show()
 
         plt.close('all')
 
@@ -273,39 +267,32 @@ class DataProfiler:
         if self.profile is None:
             raise ValueError("Сначала создайте профиль")
 
-        print("\n" + "=" * 70)
-        print(f"ПРОФИЛЬ ДАТАСЕТА: {self.dataset_name.upper()}")
-        print("=" * 70)
-
-        print(f"\nРАЗМЕРЫ:")
-        print(f"   • Образцов: {self.profile.n_samples:,}")
-        print(f"   • Признаков: {self.profile.n_features}")
+        print("\nПрофиль датасета:")
+        print(f"  Образцов: {self.profile.n_samples:,}")
+        print(f"  Признаков: {self.profile.n_features}")
         if self.profile.n_classes:
-            print(f"   • Классов: {self.profile.n_classes}")
-        print(f"   • Размер в памяти: {self.profile.memory_size_mb:.2f} MB")
+            print(f"  Классов: {self.profile.n_classes}")
+        print(f"  Размер: {self.profile.memory_size_mb:.2f} MB")
 
-        print(f"\nБАЛАНС КЛАССОВ:")
         if self.profile.class_distribution:
+            print("\nРаспределение классов:")
             for cls, count in self.profile.class_distribution.items():
                 pct = count / self.profile.n_samples * 100
-                print(f"   • Класс {cls}: {count} ({pct:.1f}%)")
-            print(f"   • Ratio баланса: {self.profile.class_balance_ratio:.3f}")
+                print(f"  Класс {cls}: {count} ({pct:.1f}%)")
 
-        print(f"\nСЛОЖНОСТЬ ДАННЫХ: {self.profile.data_complexity.upper()}")
+        print(f"\nСложность: {self.profile.data_complexity.upper()}")
 
-        print(f"\n🤖 РЕКОМЕНДУЕМЫЕ МОДЕЛИ:")
+        print("\nРекомендуемые модели:")
         for model in self.profile.recommended_models:
-            print(f"   • {model}")
+            print(f"  - {model}")
 
-        print(f"\nТРЕБУЕМАЯ ПРЕДОБРАБОТКА:")
+        print("\nПредобработка:")
         for need in self.profile.preprocessing_needs:
-            print(f"   • {need.replace('_', ' ').title()}")
-
-        print("\n" + "=" * 70)
+            print(f"  - {need.replace('_', ' ').title()}")
 
 
 def profile_from_csv(filepath: str, target_column: Optional[str] = None,
-                     dataset_name: Optional[str] = None) -> DatasetProfile:
+                    dataset_name: Optional[str] = None) -> DatasetProfile:
     if dataset_name is None:
         dataset_name = os.path.basename(filepath)
 
@@ -322,16 +309,3 @@ def profile_from_csv(filepath: str, target_column: Optional[str] = None,
     profile = profiler.profile_tabular_data(X, y, feature_names=list(df.columns))
 
     return profile
-
-
-if __name__ == "__main__":
-    from sklearn.datasets import load_iris
-
-    iris = load_iris()
-    X, y = iris.data, iris.target
-
-    profiler = DataProfiler(dataset_name="Iris_Dataset")
-    profile = profiler.profile_tabular_data(X, y, feature_names=iris.feature_names)
-    profiler.print_summary()
-    profiler.visualize_profile(save_path="iris_profile.png")
-    profile.save("iris_profile.json")

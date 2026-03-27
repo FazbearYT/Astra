@@ -1,26 +1,22 @@
+"""
+Adaptive ML System - Core Modules
+"""
 
-__version__ = "2.1.0"
-__author__ = "fazbear_r"
+__version__ = "2.0.0"
+__author__ = "Adaptive ML Team"
 
-from .model_profiler import DataProfiler, DatasetProfile, FeatureProfile, profile_from_csv
+from .model_profiler import DataProfiler, DatasetProfile, FeatureProfile
 from .model_selector import AdaptiveModelSelector, SpecializedModel
+from .pipeline_config import PipelineConfig, get_default_config, get_fast_config, get_accurate_config
 
 __all__ = [
-    "__version__",
-    "__author__",
     "DataProfiler",
     "DatasetProfile",
     "FeatureProfile",
-    "profile_from_csv",
     "AdaptiveModelSelector",
     "SpecializedModel",
+    "PipelineConfig",
+    "get_default_config",
+    "get_fast_config",
+    "get_accurate_config",
 ]
-
-
-def get_version():
-    return __version__
-
-
-def info():
-    print(f"Adaptive ML System v{__version__}")
-    print(f"Author: {__author__}")

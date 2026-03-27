@@ -1,9 +1,13 @@
+"""
+Модуль адаптивного выбора и управления ML моделями
+"""
 
 import numpy as np
 from typing import Dict, List, Any, Optional
 import joblib
 import os
 import json
+import time
 from datetime import datetime
 from sklearn.base import BaseEstimator
 from sklearn.model_selection import cross_val_score, train_test_split
@@ -18,9 +22,12 @@ from sklearn.pipeline import Pipeline
 import warnings
 warnings.filterwarnings('ignore')
 
+os.environ['OMP_NUM_THREADS'] = str(os.cpu_count())
+os.environ['OPENBLAS_NUM_THREADS'] = str(os.cpu_count())
+os.environ['MKL_NUM_THREADS'] = str(os.cpu_count())
+
 
 class SpecializedModel:
-
     def __init__(self, name: str, model: BaseEstimator,
                  profile_requirements: Dict[str, Any],
                  description: str = ""):
@@ -33,7 +40,6 @@ class SpecializedModel:
         self.training_time = None
 
     def fit(self, X: np.ndarray, y: np.ndarray, **fit_params) -> 'SpecializedModel':
-        import time
         start_time = time.time()
         self.model.fit(X, y, **fit_params)
         self.is_trained = True
@@ -74,7 +80,7 @@ class SpecializedModel:
         return results
 
     def cross_validate(self, X: np.ndarray, y: np.ndarray, cv: int = 5) -> Dict[str, float]:
-        scores = cross_val_score(self.model, X, y, cv=cv, scoring='accuracy')
+        scores = cross_val_score(self.model, X, y, cv=cv, scoring='accuracy', n_jobs=1)
         return {
             'cv_mean': float(scores.mean()),
             'cv_std': float(scores.std()),
@@ -129,7 +135,6 @@ class SpecializedModel:
             'is_trained': self.is_trained,
             'training_time': self.training_time
         }, filepath)
-        print(f"✓ Модель сохранена: {filepath}")
 
     @classmethod
     def load(cls, filepath: str) -> 'SpecializedModel':
@@ -143,12 +148,10 @@ class SpecializedModel:
         model.performance_metrics = data['performance_metrics']
         model.is_trained = data['is_trained']
         model.training_time = data['training_time']
-        print(f"✓ Модель загружена: {filepath}")
         return model
 
 
 class AdaptiveModelSelector:
-
     def __init__(self):
         self.models: List[SpecializedModel] = []
         self.best_model: Optional[SpecializedModel] = None
@@ -157,19 +160,23 @@ class AdaptiveModelSelector:
 
     def register_model(self, model: SpecializedModel):
         self.models.append(model)
-        print(f"✓ Зарегистрирована модель: {model.name}")
 
     def create_default_models(self, model_types: Optional[List[str]] = None) -> List[SpecializedModel]:
         if model_types is None:
             model_types = ['random_forest', 'svm', 'gradient_boosting',
-                          'neural_network', 'logistic_regression', 'knn']
+                          'neural_network', 'logistic_regression']
 
         created_models = []
 
         if 'random_forest' in model_types:
             rf_model = SpecializedModel(
                 name="RandomForest_Specialist",
-                model=RandomForestClassifier(n_estimators=100, max_depth=10, random_state=42, n_jobs=-1),
+                model=RandomForestClassifier(
+                    n_estimators=100,
+                    max_depth=None,
+                    random_state=42,
+                    n_jobs=-1
+                ),
                 profile_requirements={
                     'data_complexity': 'simple',
                     'class_balance_min': 0.7,
@@ -186,7 +193,13 @@ class AdaptiveModelSelector:
                 name="SVM_Specialist",
                 model=Pipeline([
                     ('scaler', StandardScaler()),
-                    ('svc', SVC(kernel='rbf', probability=True, random_state=42))
+                    ('svc', SVC(
+                        kernel='rbf',
+                        probability=True,
+                        random_state=42,
+                        C=1.0,
+                        gamma='scale'
+                    ))
                 ]),
                 profile_requirements={
                     'data_complexity': 'medium',
@@ -200,7 +213,12 @@ class AdaptiveModelSelector:
         if 'gradient_boosting' in model_types:
             gb_model = SpecializedModel(
                 name="GradientBoosting_Specialist",
-                model=GradientBoostingClassifier(n_estimators=100, max_depth=5, learning_rate=0.1, random_state=42),
+                model=GradientBoostingClassifier(
+                    n_estimators=100,
+                    max_depth=3,
+                    learning_rate=0.1,
+                    random_state=42
+                ),
                 profile_requirements={
                     'data_complexity': 'complex',
                     'min_samples': 100
@@ -215,7 +233,12 @@ class AdaptiveModelSelector:
                 name="NeuralNetwork_Specialist",
                 model=Pipeline([
                     ('scaler', StandardScaler()),
-                    ('mlp', MLPClassifier(hidden_layer_sizes=(100, 50), max_iter=1000, random_state=42))
+                    ('mlp', MLPClassifier(
+                        hidden_layer_sizes=(10, 10),
+                        max_iter=1000,
+                        random_state=42,
+                        learning_rate_init=0.001
+                    ))
                 ]),
                 profile_requirements={
                     'data_complexity': 'complex',
@@ -231,7 +254,12 @@ class AdaptiveModelSelector:
                 name="LogisticRegression_Specialist",
                 model=Pipeline([
                     ('scaler', StandardScaler()),
-                    ('lr', LogisticRegression(max_iter=1000, random_state=42))
+                    ('lr', LogisticRegression(
+                        max_iter=1000,
+                        random_state=42,
+                        C=1.0,
+                        solver='lbfgs'
+                    ))
                 ]),
                 profile_requirements={
                     'data_complexity': 'simple',
@@ -242,31 +270,16 @@ class AdaptiveModelSelector:
             self.register_model(lr_model)
             created_models.append(lr_model)
 
-        if 'knn' in model_types:
-            knn_model = SpecializedModel(
-                name="KNN_Specialist",
-                model=Pipeline([
-                    ('scaler', StandardScaler()),
-                    ('knn', KNeighborsClassifier(n_neighbors=5))
-                ]),
-                profile_requirements={
-                    'data_complexity': 'simple',
-                    'min_samples': 100,
-                    'n_features_range': (2, 50)
-                },
-                description="K-Nearest Neighbors - простая интерпретируемая модель"
-            )
-            self.register_model(knn_model)
-            created_models.append(knn_model)
-
         return created_models
 
     def profile_and_select(self, X: np.ndarray, y: np.ndarray,
                           data_profile: Optional[Dict] = None,
-                          cv_folds: int = 5) -> SpecializedModel:
-        print("\n" + "="*70)
-        print("АДАПТИВНЫЙ ВЫБОР МОДЕЛИ")
-        print("="*70)
+                          cv_folds: int = 5,
+                          use_cv_in_scoring: bool = False) -> SpecializedModel:
+        import multiprocessing
+
+        print("\nАдаптивный выбор модели")
+        print(f"Доступно потоков: {multiprocessing.cpu_count()}")
 
         if data_profile is None:
             data_profile = {
@@ -282,51 +295,72 @@ class AdaptiveModelSelector:
             X, y, test_size=0.2, random_state=42, stratify=y
         )
 
-        print(f"\nДанные:")
-        print(f"   • Train: {X_train.shape[0]} образцов")
-        print(f"   • Test: {X_test.shape[0]} образцов")
+        print(f"Данные: Train={X_train.shape[0]}, Test={X_test.shape[0]}")
 
-        print("\nОценка соответствия моделей профилю данных:")
+        print("\nОценка соответствия моделей:")
         model_scores = []
 
         for model in self.models:
             profile_score = model.matches_profile(data_profile)
             model_scores.append((model, profile_score))
-            print(f"   • {model.name}: {profile_score:.3f}")
+            print(f"  {model.name}: {profile_score:.3f}")
 
         model_scores.sort(key=lambda x: x[1], reverse=True)
 
-        print("\nТестирование топ-3 моделей:")
-        print("="*70)
+        print("\nТестирование моделей:")
 
-        best_accuracy = 0.0
-        best_model = None
+        results_table = []
+        total_models = len(model_scores)
 
-        for model, profile_score in model_scores[:3]:
-            print(f"\nТестирование: {model.name}")
-            print(f"   Соответствие профилю: {profile_score:.3f}")
+        for idx, (model, profile_score) in enumerate(model_scores, 1):
+            print(f"\n[{idx}/{total_models}] {model.name}")
 
             try:
+                print("  Обучение...", end=" ", flush=True)
+                train_start = time.time()
                 model.fit(X_train, y_train)
+                train_time = time.time() - train_start
+                print(f"({train_time:.2f}s)")
+
+                print("  Оценка...", end=" ", flush=True)
                 metrics = model.evaluate(X_test, y_test)
+                print("готово")
+
+                print(f"  Кросс-валидация ({cv_folds} folds)...", end=" ", flush=True)
+                cv_start = time.time()
                 cv_results = model.cross_validate(X_train, y_train, cv=cv_folds)
+                cv_time = time.time() - cv_start
+                print(f"({cv_time:.2f}s)")
 
-                print(f"   Accuracy: {metrics['accuracy']:.4f}")
-                print(f"   F1-Score: {metrics['f1']:.4f}")
-                print(f"   CV Score: {cv_results['cv_mean']:.4f} (+/- {cv_results['cv_std']:.4f})")
-                print(f"   Время обучения: {model.training_time:.3f}s")
+                print(f"  Accuracy: {metrics['accuracy']:.4f}")
+                print(f"  F1-Score: {metrics['f1']:.4f}")
+                print(f"  CV Score: {cv_results['cv_mean']:.4f}")
 
-                final_score = (
-                    metrics['accuracy'] * 0.4 +
-                    metrics['f1'] * 0.3 +
-                    cv_results['cv_mean'] * 0.3
-                )
+                if use_cv_in_scoring:
+                    final_score = (
+                        metrics['accuracy'] * 0.5 +
+                        metrics['f1'] * 0.3 +
+                        cv_results['cv_mean'] * 0.2
+                    )
+                else:
+                    final_score = (
+                        metrics['accuracy'] * 0.7 +
+                        metrics['f1'] * 0.3
+                    )
 
-                print(f"   Итоговый скор: {final_score:.4f}")
+                print(f"  Итоговый скор: {final_score:.4f}")
 
-                if final_score > best_accuracy:
-                    best_accuracy = final_score
-                    best_model = model
+                results_table.append({
+                    'model': model.name,
+                    'profile_score': profile_score,
+                    'accuracy': metrics['accuracy'],
+                    'f1': metrics['f1'],
+                    'precision': metrics['precision'],
+                    'recall': metrics['recall'],
+                    'cv_mean': cv_results['cv_mean'],
+                    'final_score': final_score,
+                    'training_time': train_time
+                })
 
                 self.selection_history.append({
                     'model': model.name,
@@ -338,18 +372,27 @@ class AdaptiveModelSelector:
                 })
 
             except Exception as e:
-                print(f"   ⚠️  Ошибка: {str(e)}")
+                print(f"  Ошибка: {str(e)}")
                 continue
 
-        if best_model is None:
-            raise ValueError("Ни одна модель не прошла тестирование!")
+        print("\nСравнение моделей:")
+        print(f"{'Модель':<30} {'Accuracy':<10} {'F1-Score':<10} {'Скор':<10}")
+        print("-" * 65)
+
+        for result in sorted(results_table, key=lambda x: x['final_score'], reverse=True):
+            print(f"{result['model']:<30} {result['accuracy']:<10.4f} {result['f1']:<10.4f} {result['final_score']:<10.4f}")
+
+        if not results_table:
+            raise ValueError("Ни одна модель не была успешно обучена!")
+
+        best_result = max(results_table, key=lambda x: x['final_score'])
+        best_model = next(m for m in self.models if m.name == best_result['model'])
 
         self.best_model = best_model
 
-        print("\n" + "="*70)
-        print(f"ВЫБРАНА МОДЕЛЬ: {best_model.name}")
-        print(f"   Итоговый скор: {best_accuracy:.4f}")
-        print("="*70)
+        print(f"\nВыбрана модель: {best_model.name}")
+        print(f"Accuracy: {best_result['accuracy']:.4f}")
+        print(f"F1-Score: {best_result['f1']:.4f}")
 
         return best_model
 
@@ -382,8 +425,6 @@ class AdaptiveModelSelector:
         with open(history_path, 'w') as f:
             json.dump(self.selection_history, f, indent=2)
 
-        print(f"\n✓ Сохранено {saved_count} из {len(self.models)} моделей в: {directory}")
-
     def load_models(self, directory: str = "saved_models"):
         self.models = []
 
@@ -392,8 +433,6 @@ class AdaptiveModelSelector:
                 filepath = os.path.join(directory, filename)
                 model = SpecializedModel.load(filepath)
                 self.models.append(model)
-
-        print(f"\n✓ Загружено моделей: {len(self.models)}")
 
         history_path = os.path.join(directory, "selection_history.json")
         if os.path.exists(history_path):
@@ -408,29 +447,6 @@ class AdaptiveModelSelector:
                     for model in self.models:
                         if model.name == best_model_name:
                             self.best_model = model
-                            print(f"✅ Автоматически установлена лучшая модель: {model.name}")
                             break
             except Exception as e:
-                print(f"⚠️  Не удалось загрузить историю выбора: {e}")
-
-
-if __name__ == "__main__":
-    from sklearn.datasets import load_iris
-    iris = load_iris()
-    X, y = iris.data, iris.target
-
-    selector = AdaptiveModelSelector()
-    selector.create_default_models()
-
-    best_model = selector.profile_and_select(
-        X, y,
-        data_profile={
-            'n_samples': X.shape[0],
-            'n_features': X.shape[1],
-            'data_complexity': 'simple',
-            'class_balance_ratio': 1.0
-        },
-        cv_folds=5
-    )
-
-    selector.save_all_models()
+                pass

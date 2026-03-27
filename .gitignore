@@ -45,6 +45,7 @@ models/*.onnx
 *.pth
 
 # Datasets (large files)
+data/
 data/oxford_flowers_raw/
 data/oxford_flowers/images/
 data/oxford_flowers/*/images/*
@@ -60,6 +61,7 @@ logs/
 Thumbs.db
 
 # Testing
+outputs/
 .pytest_cache/
 .coverage
 htmlcov/
