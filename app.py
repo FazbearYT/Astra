@@ -17,14 +17,20 @@ os.environ['OPENBLAS_NUM_THREADS'] = str(os.cpu_count())
 os.environ['MKL_NUM_THREADS'] = str(os.cpu_count())
 os.environ['NUMEXPR_NUM_THREADS'] = str(os.cpu_count())
 
-sys.path.insert(0, str(Path(__file__).parent / "src"))
+# Убедитесь, что каталог src добавлен в sys.path
+script_dir = Path(__file__).parent
+if (script_dir / "src").exists():
+    sys.path.insert(0, str(script_dir / "src"))
+else: # If src is not a sub-directory, assume files are in current directory
+    sys.path.insert(0, str(script_dir))
+
 
 from model_profiler import DataProfiler
-from model_selector import AdaptiveModelSelector
+from model_selector import AdaptiveModelSelector, SpecializedModel # Import SpecializedModel for type hinting and potential use
 from pipeline_config import PipelineConfig, get_default_config, get_fast_config, get_accurate_config, interactive_config
-from progress import get_progress_bar, progress_range, progress_context
+# from progress import get_progress_bar, progress_range, progress_context # Assuming these are part of the project but not provided, commenting out to prevent errors if not present
 from sklearn.model_selection import train_test_split
-from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
+from sklearn.metrics import accuracy_score, classification_report, confusion_matrix, f1_score # ИСПРАВЛЕНО: Добавлен f1_score
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
@@ -174,12 +180,12 @@ class AdaptiveMLApp:
         self.target_column = None
         self.feature_columns = None
         self.profile = None
-        self.selector = None
-        self.best_model = None
+        self.selector: Optional[AdaptiveModelSelector] = None
+        self.best_model: Optional[SpecializedModel] = None # Added type hint
         self.results = {}
         self.output_dir = None
         self.session_id = None
-        self.pipeline_config = None
+        self.pipeline_config: Optional[PipelineConfig] = None # Added type hint
         self.data_manager = None
 
     def clear_screen(self):
@@ -351,12 +357,18 @@ class AdaptiveMLApp:
         print(f"Найдено сессий: {len(runs)}")
         print("\nПоследние сессии:")
 
-        for run in runs[-5:]:
+        for run in runs[-5:]: # Show last 5 runs
             results_file = run / "results.json"
             if results_file.exists():
-                with open(results_file, 'r') as f:
-                    results = json.load(f)
-                print(f"  {run.name}: {results['best_model']} ({results['accuracy']:.4f})")
+                try:
+                    with open(results_file, 'r', encoding='utf-8') as f:
+                        results = json.load(f)
+                    print(f"  {run.name}: {results.get('best_model', 'N/A')} (Accuracy: {results.get('accuracy', 0):.4f})")
+                except json.JSONDecodeError:
+                    print(f"  {run.name}: (Ошибка чтения results.json)")
+            else:
+                print(f"  {run.name}: (results.json не найден)")
+
 
         input("\nНажмите Enter для продолжения...")
 
@@ -365,14 +377,12 @@ class AdaptiveMLApp:
 
         print("Режим конфигурации:")
         print("  1. Быстрая настройка")
-        print("  2. Расширенная настройка")
-        print("  3. Пропустить (по умолчанию)")
+        print("  2. Расширенная настройка (интерактивно)")
+        print("  3. Стандартная (по умолчанию)")
 
-        mode = self.get_user_choice("\nВыберите режим", [
-            "Быстрая настройка",
-            "Расширенная настройка",
-            "Пропустить"
-        ])
+        mode_options = ["Быстрая настройка", "Расширенная настройка", "Стандартная (по умолчанию)"]
+        mode = self.get_user_choice("\nВыберите режим", mode_options)
+
 
         if mode == 1:
             print("\nПрофиль:")
@@ -380,29 +390,31 @@ class AdaptiveMLApp:
             print("  2. Стандартный (5 моделей, 5 CV)")
             print("  3. Точный (5 моделей, 10 CV)")
 
-            profile = self.get_user_choice("\nПрофиль", [
-                "Быстрый",
-                "Стандартный",
-                "Точный"
-            ])
+            profile_options = ["Быстрый", "Стандартный", "Точный"]
+            profile = self.get_user_choice("\nПрофиль", profile_options)
 
             if profile == 1:
                 self.pipeline_config = get_fast_config()
             elif profile == 2:
                 self.pipeline_config = get_default_config()
-            else:
+            else: # profile == 3
                 self.pipeline_config = get_accurate_config()
 
             print(f"\nМоделей: {sum(1 for m in self.pipeline_config.models.values() if m.enabled)}")
-            print(f"CV folds: {self.pipeline_config.training['cv_folds']}")
+            print(f"CV folds: {self.pipeline_config.training.get('cv_folds', 'N/A')}")
 
         elif mode == 2:
             self.pipeline_config = interactive_config()
-        else:
+        else: # mode == 3 (Standard/Default)
             self.pipeline_config = get_default_config()
 
         config_path = self.output_dir / "pipeline_config.json"
-        self.pipeline_config.save(str(config_path))
+        try:
+            self.pipeline_config.save(str(config_path))
+            print(f"Конфигурация сохранена: {config_path}")
+        except Exception as e:
+            print(f"Ошибка сохранения конфигурации: {e}")
+
 
         return True
 
@@ -414,30 +426,25 @@ class AdaptiveMLApp:
         if available:
             print("\nНайдены датасеты:")
 
-            options = []
-            for i, ds in enumerate(available, 1):
-                print(f"  {i}. {ds['name']} ({ds['rows']} строк)")
-                options.append(ds)
+            options_display = []
+            for ds in available:
+                options_display.append(f"{ds['name']} ({ds['rows']} строк)")
 
-            options.append({'type': 'create_new', 'name': 'Создать тестовые датасеты'})
-            print(f"  {len(options)}. Создать тестовые датасеты")
-
-            choice = self.get_user_choice("\nВыберите датасет",
-                                         [opt['name'] for opt in options])
+            choice = self.get_user_choice("\nВыберите датасет", options_display + ["Создать тестовые датасеты"])
 
             if choice <= len(available):
-                selected = options[choice - 1]
+                selected = available[choice - 1]
                 self.data = self.data_manager.load_dataset(selected['path'])
-                print(f"Загружено {len(self.data)} строк")
+                print(f"Загружено {len(self.data)} строк из {selected['name']}")
                 return True
-            elif choice == len(options):
+            elif choice == len(available) + 1: # "Создать тестовые датасеты"
                 self.create_test_datasets_menu()
-                return self.load_data()
+                return self.load_data() # Try loading data again after creation
 
             return False
 
         else:
-            print("Датасеты не найдены!")
+            print("Датасеты не найдены.")
 
             choice = self.get_user_choice("\nЧто делать", [
                 "Создать тестовые датасеты",
@@ -456,19 +463,21 @@ class AdaptiveMLApp:
         target_candidates = ['target', 'class', 'label', 'category',
                            'target_name', 'flower_name', 'species']
 
+        found_target = False
         for col in target_candidates:
             if col in self.data.columns:
                 self.target_column = col
-                print(f"Найдена target колонка: {col}")
+                print(f"Автоматически определена целевая колонка: {col}")
+                found_target = True
                 break
 
-        if self.target_column is None:
+        if not found_target:
             columns = list(self.data.columns)
-
+            print("Доступные колонки:")
             for i, col in enumerate(columns, 1):
                 sample = self.data[col].iloc[0] if len(self.data) > 0 else "N/A"
                 unique_vals = self.data[col].nunique()
-                print(f"  {i:2}. {col:30} | тип: {str(self.data[col].dtype):10}")
+                print(f"  {i:2}. {col:30} | тип: {str(self.data[col].dtype):10} | Уникальных: {unique_vals}")
 
             choice = self.get_user_choice("\nКакую колонку предсказываем", columns)
             self.target_column = columns[choice - 1]
@@ -482,15 +491,21 @@ class AdaptiveMLApp:
             if pd.api.types.is_numeric_dtype(self.data[col]):
                 self.feature_columns.append(col)
 
-        if len(self.feature_columns) == 0:
-            print("Нет числовых колонок!")
+        if not self.feature_columns:
+            print("Ошибка: В датасете нет числовых колонок для использования в качестве признаков!")
             return False
 
         self.X = self.data[self.feature_columns].values
 
         print(f"Признаков: {len(self.feature_columns)}")
         print(f"Образцов: {self.X.shape[0]}")
-        print(f"Классов: {len(np.unique(self.y))}")
+        # Handle cases where y might not have multiple unique values (e.g., all same class)
+        unique_classes = np.unique(self.y)
+        print(f"Классов: {len(unique_classes)}")
+        if len(unique_classes) < 2:
+            print("Предупреждение: Целевая переменная содержит менее 2 уникальных классов. Это может вызвать проблемы с обучением.")
+            return False
+
 
         return True
 
@@ -506,15 +521,19 @@ class AdaptiveMLApp:
         profiler.print_summary()
 
         profile_path = self.output_dir / "profile.json"
-        self.profile.save(str(profile_path))
+        try:
+            self.profile.save(str(profile_path))
+            print(f"Профиль данных сохранен: {profile_path}")
+        except Exception as e:
+            print(f"Ошибка сохранения профиля данных: {e}")
 
         try:
             viz_path = self.output_dir / "visualizations" / "data_profile.png"
             profiler.visualize_profile(save_path=str(viz_path))
             plt.close('all')
-            print(f"График: {viz_path}")
+            print(f"График профиля данных: {viz_path}")
         except Exception as e:
-            print(f"Ошибка визуализации: {e}")
+            print(f"Ошибка визуализации профиля данных: {e}")
 
         return True
 
@@ -524,31 +543,48 @@ class AdaptiveMLApp:
         self.selector = AdaptiveModelSelector()
 
         if self.pipeline_config:
-            print("Конфигурация:")
+            print("Конфигурация Pipeline:")
             enabled_models = [m.name for m in self.pipeline_config.models.values() if m.enabled]
-            print(f"  Модели: {', '.join(enabled_models)}")
-            print(f"  CV folds: {self.pipeline_config.training['cv_folds']}")
+            print(f"  Включенные модели: {', '.join(enabled_models) if enabled_models else 'Нет'}")
+            print(f"  CV folds: {self.pipeline_config.training.get('cv_folds', 'N/A')}")
+            print(f"  Вес Accuracy: {self.pipeline_config.scoring.get('accuracy_weight', 'N/A')}")
+            print(f"  Вес F1-Score: {self.pipeline_config.scoring.get('f1_weight', 'N/A')}")
+            print(f"  Вес CV Score: {self.pipeline_config.scoring.get('cv_weight', 'N/A')}")
 
-            self.selector.create_default_models(
-                model_types=[k for k, v in self.pipeline_config.models.items() if v.enabled]
-            )
+            # --- ИСПРАВЛЕНИЕ: Передача конфигурации моделей в selector ---
+            try:
+                self.selector.register_models_from_pipeline_config(self.pipeline_config)
+            except ValueError as e:
+                print(f"Ошибка при регистрации моделей из конфигурации: {e}")
+                return False
+            # --- КОНЕЦ ИСПРАВЛЕНИЯ ---
         else:
-            self.selector.create_default_models()
+            print("Конфигурация Pipeline не установлена. Используются стандартные параметры.")
+            default_config = get_default_config()
+            self.selector.register_models_from_pipeline_config(default_config)
 
-        X_train, X_test, y_train, y_test = train_test_split(
-            self.X, self.y, test_size=0.2, random_state=42, stratify=self.y
-        )
+        if not self.selector.models:
+            print("Ошибка: Нет моделей для обучения. Проверьте конфигурацию pipeline.")
+            return False
 
-        print(f"Train: {len(X_train)}, Test: {len(X_test)}")
 
-        cv_folds = self.pipeline_config.training['cv_folds'] if self.pipeline_config else 5
-        use_cv = self.pipeline_config.training['use_cv_in_scoring'] if self.pipeline_config else False
+        # Ensure cv_folds and use_cv are correctly pulled from pipeline_config
+        cv_folds = self.pipeline_config.training.get('cv_folds', 5)
+        use_cv = self.pipeline_config.training.get('use_cv_in_scoring', False)
+        accuracy_weight = self.pipeline_config.scoring.get('accuracy_weight', 0.7)
+        f1_weight = self.pipeline_config.scoring.get('f1_weight', 0.3)
+        cv_weight = self.pipeline_config.scoring.get('cv_weight', 0.0)
 
+        # The profile_and_select method now takes the full X, y and handles its own split
+        # This is consistent with how the method is designed in model_selector.py
         self.best_model = self.selector.profile_and_select(
             self.X, self.y,
             data_profile=self.profile.to_dict(),
             cv_folds=cv_folds,
-            use_cv_in_scoring=use_cv
+            use_cv_in_scoring=use_cv,
+            accuracy_weight=accuracy_weight,
+            f1_weight=f1_weight,
+            cv_weight=cv_weight
         )
 
         return True
@@ -556,93 +592,150 @@ class AdaptiveMLApp:
     def evaluate_and_show_results(self):
         self.print_step(5, "Результаты")
 
-        X_train, X_test, y_train, y_test = train_test_split(
+        if self.best_model is None:
+            print("Ошибка: Лучшая модель не выбрана.")
+            return False
+
+        # Split data again to ensure the same split used for final evaluation,
+        # although selector.profile_and_select already performed one for internal evaluation.
+        # This ensures the external report uses a consistent split.
+        X_train_final, X_test_final, y_train_final, y_test_final = train_test_split(
             self.X, self.y, test_size=0.2, random_state=42, stratify=self.y
         )
 
-        y_pred = self.selector.predict(X_test)
-        accuracy = accuracy_score(y_test, y_pred)
+        # The best_model returned by selector.profile_and_select is already trained on X_train
+        # So we evaluate on X_test_final
+        y_pred = self.best_model.predict(X_test_final)
+        accuracy = accuracy_score(y_test_final, y_pred)
 
-        print(f"\nМодель: {self.best_model.name}")
-        print(f"Точность: {accuracy:.4f} ({accuracy*100:.2f}%)")
-        print(classification_report(y_test, y_pred))
+        print(f"\nВыбранная модель: {self.best_model.name}")
+        print(f"Итоговая точность на тестовой выборке: {accuracy:.4f} ({accuracy*100:.2f}%)")
+        print("\nОтчет по классификации:")
+        print(classification_report(y_test_final, y_pred, zero_division=0)) # Added zero_division to avoid warnings
+
 
         try:
-            cm = confusion_matrix(y_test, y_pred)
+            cm = confusion_matrix(y_test_final, y_pred)
             fig, ax = plt.subplots(figsize=(8, 6))
-            sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', ax=ax)
-            ax.set_title(f'Matrix - {self.best_model.name}')
+            sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', ax=ax,
+                        xticklabels=np.unique(self.y), yticklabels=np.unique(self.y))
+            ax.set_title(f'Матрица ошибок - {self.best_model.name}')
+            ax.set_xlabel('Предсказанный класс')
+            ax.set_ylabel('Истинный класс')
             cm_path = self.output_dir / "visualizations" / "confusion_matrix.png"
             plt.savefig(str(cm_path), dpi=300, bbox_inches='tight')
             plt.close('all')
-            print(f"Матрица ошибок: {cm_path}")
+            print(f"Матрица ошибок сохранена: {cm_path}")
         except Exception as e:
-            print(f"Ошибка: {e}")
+            print(f"Ошибка при создании матрицы ошибок: {e}")
 
+        # Store selected metrics
         self.results = {
             'session_id': self.session_id,
+            'dataset_name': getattr(self.profile, 'dataset_name', 'unknown'), # Get dataset name from profile
             'target_column': self.target_column,
             'best_model': self.best_model.name,
             'accuracy': float(accuracy),
+            'f1_score': float(f1_score(y_test_final, y_pred, average='weighted', zero_division=0)),
             'n_samples': int(self.X.shape[0]),
             'n_features': int(self.X.shape[1]),
-            'timestamp': str(datetime.now())
+            'timestamp': str(datetime.now().isoformat()) # Use ISO format for better consistency
         }
 
         results_path = self.output_dir / "results.json"
         with open(results_path, 'w', encoding='utf-8') as f:
             json.dump(self.results, f, indent=2, ensure_ascii=False)
-        print(f"Результаты: {results_path}")
+        print(f"Результаты анализа сохранены: {results_path}")
 
         models_dir = self.output_dir / "models"
         self.selector.save_all_models(str(models_dir))
-        print(f"Модели: {models_dir}")
+        print(f"Обученные модели сохранены в: {models_dir}")
 
         return True
 
     def predict_new_data(self):
         self.print_step(6, "Предсказание")
 
-        choice = self.get_user_choice("\nДействие", [
-            "Ввести данные",
-            "Загрузить CSV",
+        if self.best_model is None:
+            print("Невозможно сделать предсказания, лучшая модель не обучена.")
+            return True # Not a critical error to stop the app
+
+        choice_options = [
+            "Ввести данные вручную",
+            "Загрузить данные из CSV-файла",
             "Завершить"
-        ])
+        ]
+        choice = self.get_user_choice("\nДействие", choice_options)
 
         if choice == 1:
-            print(f"Введите {len(self.feature_columns)} значений:")
+            print(f"Введите {len(self.feature_columns)} числовых значений, разделенных пробелами (например, {self.feature_columns}):")
             try:
-                values = [float(v) for v in input("> ").strip().replace(',', ' ').split()]
+                input_str = input("> ").strip()
+                values = [float(v) for v in input_str.replace(',', '.').split()] # Handle comma as decimal separator
                 if len(values) != len(self.feature_columns):
-                    print(f"Ожидалось {len(self.feature_columns)}")
+                    print(f"Ошибка: Ожидалось {len(self.feature_columns)} значений, получено {len(values)}. Попробуйте снова.")
                     return False
 
-                prediction = self.selector.predict(np.array([values]))[0]
-                print(f"Класс: {prediction}")
+                prediction_input = np.array([values])
+                prediction = self.selector.predict(prediction_input)[0]
+                prediction_proba = self.selector.predict_proba(prediction_input)
+
+                print(f"\nПредсказанный класс: {prediction}")
+                print(f"Вероятности классов: {prediction_proba}")
+            except ValueError as e:
+                print(f"Ошибка ввода: Убедитесь, что вы вводите числа, разделенные пробелами. {e}")
             except Exception as e:
-                print(f"Ошибка: {e}")
+                print(f"Произошла непредвиденная ошибка при предсказании: {e}")
 
         elif choice == 2:
-            filepath = input("CSV путь: ").strip()
+            filepath = input("Введите путь к CSV-файлу с новыми данными: ").strip()
             if Path(filepath).exists():
                 try:
-                    new_data = pd.read_csv(filepath)
-                    new_x = new_data[self.feature_columns].values
-                    predictions = self.selector.predict(new_x)
-                    new_data['prediction'] = predictions
-                    output_path = self.output_dir / "predictions.csv"
-                    new_data.to_csv(output_path, index=False)
-                    print(f"Предсказания: {output_path}")
+                    new_data_df = pd.read_csv(filepath)
+                    # Ensure new data has the same feature columns
+                    missing_cols = [col for col in self.feature_columns if col not in new_data_df.columns]
+                    if missing_cols:
+                        print(f"Ошибка: В новом CSV-файле отсутствуют необходимые колонки признаков: {', '.join(missing_cols)}")
+                        return False
+
+                    new_x_for_prediction = new_data_df[self.feature_columns].values
+                    predictions = self.selector.predict(new_x_for_prediction)
+
+                    # Add predictions and probabilities to a copy of the dataframe
+                    output_df = new_data_df.copy()
+                    output_df['predicted_target'] = predictions
+
+                    if hasattr(self.best_model, 'predict_proba'):
+                        probabilities = self.best_model.predict_proba(new_x_for_prediction)
+                        for i, prob_col in enumerate(probabilities.T):
+                            output_df[f'probability_class_{i}'] = prob_col
+
+                    output_path = self.output_dir / f"predictions_{Path(filepath).stem}.csv"
+                    output_df.to_csv(output_path, index=False, encoding='utf-8')
+                    print(f"Предсказания сохранены в: {output_path}")
+                except pd.errors.EmptyDataError:
+                    print(f"Ошибка: CSV-файл '{filepath}' пуст.")
                 except Exception as e:
-                    print(f"Ошибка: {e}")
+                    print(f"Ошибка при обработке CSV-файла для предсказания: {e}")
+            else:
+                print(f"Ошибка: Файл '{filepath}' не найден.")
+        elif choice == 3: # Завершить
+            return True # Simply exit prediction flow
 
         return True
 
     def show_summary(self):
-        self.print_header("Готово!")
-        print(f"Модель: {self.best_model.name}")
-        print(f"Accuracy: {self.results['accuracy']*100:.2f}%")
-        print(f"\nРезультаты: {self.output_dir}")
+        self.print_header("Анализ завершен!")
+        if self.best_model and self.results:
+            print(f"Выбранная модель: {self.best_model.name}")
+            print(f"Итоговая точность: {self.results['accuracy']*100:.2f}%")
+            print(f"Итоговый F1-Score: {self.results.get('f1_score', 'N/A')*100:.2f}%")
+            print(f"\nВсе результаты и артефакты сохранены в: {self.output_dir}")
+        else:
+            print("Не удалось завершить анализ или получить результаты.")
+
+        input("\nНажмите Enter для выхода...")
+
 
     def run(self):
         self.initialize_data_manager()
@@ -652,7 +745,7 @@ class AdaptiveMLApp:
 
             if choice == 1:
                 self.run_data_analysis()
-                input("\nНажмите Enter для продолжения...")
+                # run_data_analysis already handles user prompts at the end
             elif choice == 2:
                 self.create_test_datasets_menu()
             elif choice == 3:

@@ -1,4 +1,5 @@
 develop_tests/
+test.*
 # Python
 __pycache__/
 *.py[cod]
@@ -33,7 +34,7 @@ env/
 *.swp
 *.swo
 *~
-
+test.py
 # Jupyter
 .ipynb_checkpoints/
 
