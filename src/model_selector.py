@@ -22,9 +22,29 @@ from sklearn.pipeline import Pipeline
 import warnings
 warnings.filterwarnings('ignore')
 
+# Импорт PipelineConfig для типизации, предполагая, что pipeline_config.py находится в том же каталоге или доступен через sys.path
+try:
+    from pipeline_config import ModelConfig, PipelineConfig
+except ImportError:
+    # Fallback for testing or if structure is different
+    # Define a minimal dataclass if PipelineConfig is not directly importable for type hinting
+    class ModelConfig:
+        name: str
+        enabled: bool = True
+        params: Dict[str, Any] = None
+        profile_requirements: Dict[str, Any] = None
+        description: str = ""
+    class PipelineConfig:
+        models: Dict[str, ModelConfig] = None
+        training: Dict[str, Any] = None
+        scoring: Dict[str, float] = None
+
+
 os.environ['OMP_NUM_THREADS'] = str(os.cpu_count())
 os.environ['OPENBLAS_NUM_THREADS'] = str(os.cpu_count())
 os.environ['MKL_NUM_THREADS'] = str(os.cpu_count())
+os.environ['NUMEXPR_NUM_THREADS'] = str(os.cpu_count())
+os.environ['MKL_DYNAMIC'] = 'FALSE'
 
 
 class SpecializedModel:
@@ -41,7 +61,16 @@ class SpecializedModel:
 
     def fit(self, X: np.ndarray, y: np.ndarray, **fit_params) -> 'SpecializedModel':
         start_time = time.time()
-        self.model.fit(X, y, **fit_params)
+        # Handle Pipeline fit_params for steps if present
+        if isinstance(self.model, Pipeline):
+            # If the model is a pipeline, pass fit_params to the last step
+            # This is a common pattern, but could be more sophisticated if needed
+            # For simplicity, assuming the last step is the estimator that needs params
+            estimator_name = self.model.steps[-1][0]
+            step_fit_params = {f"{estimator_name}__{k}": v for k, v in fit_params.items()}
+            self.model.fit(X, y, **step_fit_params)
+        else:
+            self.model.fit(X, y, **fit_params)
         self.is_trained = True
         self.training_time = time.time() - start_time
         return self
@@ -80,7 +109,9 @@ class SpecializedModel:
         return results
 
     def cross_validate(self, X: np.ndarray, y: np.ndarray, cv: int = 5) -> Dict[str, float]:
-        scores = cross_val_score(self.model, X, y, cv=cv, scoring='accuracy', n_jobs=1)
+        # Consider using a consistent scoring metric if combined with f1_score later
+        # For now, keeping as accuracy as per original code, but a note for improvement
+        scores = cross_val_score(self.model, X, y, cv=cv, scoring='accuracy', n_jobs=-1)
         return {
             'cv_mean': float(scores.mean()),
             'cv_std': float(scores.std()),
@@ -98,7 +129,9 @@ class SpecializedModel:
 
         if 'class_balance_min' in self.profile_requirements:
             max_score += 1.0
-            if data_profile.get('class_balance_ratio', 0) >= self.profile_requirements['class_balance_min']:
+            # Ensure class_balance_ratio exists in data_profile
+            if data_profile.get('class_balance_ratio') is not None and \
+               data_profile['class_balance_ratio'] >= self.profile_requirements['class_balance_min']:
                 score += 1.0
 
         if 'min_samples' in self.profile_requirements:
@@ -161,136 +194,86 @@ class AdaptiveModelSelector:
     def register_model(self, model: SpecializedModel):
         self.models.append(model)
 
-    def create_default_models(self, model_types: Optional[List[str]] = None) -> List[SpecializedModel]:
-        if model_types is None:
-            model_types = ['random_forest', 'svm', 'gradient_boosting',
-                          'neural_network', 'logistic_regression']
+    def _get_sklearn_model_instance(self, model_name: str, params: Dict[str, Any]) -> BaseEstimator:
+        """Helper to create sklearn model instances based on name and parameters."""
+        # Make a copy of params to avoid modifying the original dict during instantiation
+        current_params = params.copy()
 
-        created_models = []
+        if model_name == "RandomForest_Specialist":
+            return RandomForestClassifier(**current_params)
+        elif model_name == "SVM_Specialist":
+            return Pipeline([
+                ('scaler', StandardScaler()),
+                ('svc', SVC(**current_params))
+            ])
+        elif model_name == "GradientBoosting_Specialist":
+            return GradientBoostingClassifier(**current_params)
+        elif model_name == "NeuralNetwork_Specialist":
+            return Pipeline([
+                ('scaler', StandardScaler()),
+                ('mlp', MLPClassifier(**current_params))
+            ])
+        elif model_name == "LogisticRegression_Specialist":
+            return Pipeline([
+                ('scaler', StandardScaler()),
+                ('lr', LogisticRegression(**current_params))
+            ])
+        else:
+            raise ValueError(f"Unknown model name or model not implemented for '{model_name}'")
 
-        if 'random_forest' in model_types:
-            rf_model = SpecializedModel(
-                name="RandomForest_Specialist",
-                model=RandomForestClassifier(
-                    n_estimators=100,
-                    max_depth=None,
-                    random_state=42,
-                    n_jobs=-1
-                ),
-                profile_requirements={
-                    'data_complexity': 'simple',
-                    'class_balance_min': 0.7,
-                    'min_samples': 50,
-                    'n_features_range': (4, 100)
-                },
-                description="Random Forest - эффективен на небольших сбалансированных датасетах"
-            )
-            self.register_model(rf_model)
-            created_models.append(rf_model)
+    def register_models_from_pipeline_config(self, pipeline_config: PipelineConfig):
+        """
+        Registers models in the selector based on the provided PipelineConfig.
+        This ensures model parameters and profile requirements from the config are used.
+        """
+        self.models = [] # Clear any previously registered models
+        for model_key, model_cfg in pipeline_config.models.items():
+            if model_cfg.enabled:
+                try:
+                    # Create the underlying sklearn model instance with parameters from config
+                    sklearn_model_instance = self._get_sklearn_model_instance(model_cfg.name, model_cfg.params)
 
-        if 'svm' in model_types:
-            svm_model = SpecializedModel(
-                name="SVM_Specialist",
-                model=Pipeline([
-                    ('scaler', StandardScaler()),
-                    ('svc', SVC(
-                        kernel='rbf',
-                        probability=True,
-                        random_state=42,
-                        C=1.0,
-                        gamma='scale'
-                    ))
-                ]),
-                profile_requirements={
-                    'data_complexity': 'medium',
-                    'n_features_range': (2, 50)
-                },
-                description="SVM с RBF ядром - эффективен на данных с четкими границами"
-            )
-            self.register_model(svm_model)
-            created_models.append(svm_model)
+                    # Create the SpecializedModel wrapper
+                    specialized_model = SpecializedModel(
+                        name=model_cfg.name,
+                        model=sklearn_model_instance,
+                        profile_requirements=model_cfg.profile_requirements,
+                        description=model_cfg.description
+                    )
+                    self.register_model(specialized_model)
+                except ValueError as e:
+                    print(f"Warning: Could not register model {model_cfg.name} - {e}")
+                except TypeError as e:
+                    print(f"Warning: Model {model_cfg.name} parameters error - {e}. Check config for model {model_cfg.name}.")
+                    continue
+        if not self.models:
+            raise ValueError("No models were enabled or successfully registered from the pipeline config.")
 
-        if 'gradient_boosting' in model_types:
-            gb_model = SpecializedModel(
-                name="GradientBoosting_Specialist",
-                model=GradientBoostingClassifier(
-                    n_estimators=100,
-                    max_depth=3,
-                    learning_rate=0.1,
-                    random_state=42
-                ),
-                profile_requirements={
-                    'data_complexity': 'complex',
-                    'min_samples': 100
-                },
-                description="Gradient Boosting - эффективен на сложных нелинейных данных"
-            )
-            self.register_model(gb_model)
-            created_models.append(gb_model)
-
-        if 'neural_network' in model_types:
-            nn_model = SpecializedModel(
-                name="NeuralNetwork_Specialist",
-                model=Pipeline([
-                    ('scaler', StandardScaler()),
-                    ('mlp', MLPClassifier(
-                        hidden_layer_sizes=(10, 10),
-                        max_iter=1000,
-                        random_state=42,
-                        learning_rate_init=0.001
-                    ))
-                ]),
-                profile_requirements={
-                    'data_complexity': 'complex',
-                    'min_samples': 200
-                },
-                description="Нейронная сеть - универсальная модель"
-            )
-            self.register_model(nn_model)
-            created_models.append(nn_model)
-
-        if 'logistic_regression' in model_types:
-            lr_model = SpecializedModel(
-                name="LogisticRegression_Specialist",
-                model=Pipeline([
-                    ('scaler', StandardScaler()),
-                    ('lr', LogisticRegression(
-                        max_iter=1000,
-                        random_state=42,
-                        C=1.0,
-                        solver='lbfgs'
-                    ))
-                ]),
-                profile_requirements={
-                    'data_complexity': 'simple',
-                    'n_features_range': (2, 1000)
-                },
-                description="Логистическая регрессия - быстрая базовая модель"
-            )
-            self.register_model(lr_model)
-            created_models.append(lr_model)
-
-        return created_models
 
     def profile_and_select(self, X: np.ndarray, y: np.ndarray,
                           data_profile: Optional[Dict] = None,
                           cv_folds: int = 5,
-                          use_cv_in_scoring: bool = False) -> SpecializedModel:
+                          use_cv_in_scoring: bool = False,
+                          accuracy_weight: float = 0.7,
+                          f1_weight: float = 0.3,
+                          cv_weight: float = 0.0) -> SpecializedModel:
         import multiprocessing
 
         print("\nАдаптивный выбор модели")
         print(f"Доступно потоков: {multiprocessing.cpu_count()}")
 
         if data_profile is None:
+            # Create a basic profile if none is provided
             data_profile = {
                 'n_samples': X.shape[0],
                 'n_features': X.shape[1],
-                'data_complexity': 'medium',
-                'class_balance_ratio': 1.0
+                'data_complexity': 'medium', # Default, ideally profiled
+                'class_balance_ratio': 1.0 # Default, ideally profiled
             }
 
         self.data_profile = data_profile
 
+        # It's better to perform the split once here for consistency
         X_train, X_test, y_train, y_test = train_test_split(
             X, y, test_size=0.2, random_state=42, stratify=y
         )
@@ -299,6 +282,9 @@ class AdaptiveModelSelector:
 
         print("\nОценка соответствия моделей:")
         model_scores = []
+
+        if not self.models:
+            raise ValueError("No models are registered for selection. Please register models first.")
 
         for model in self.models:
             profile_score = model.matches_profile(data_profile)
@@ -318,6 +304,7 @@ class AdaptiveModelSelector:
             try:
                 print("  Обучение...", end=" ", flush=True)
                 train_start = time.time()
+                # Pass fit_params if necessary, e.g., sample_weight, but not used here
                 model.fit(X_train, y_train)
                 train_time = time.time() - train_start
                 print(f"({train_time:.2f}s)")
@@ -328,24 +315,27 @@ class AdaptiveModelSelector:
 
                 print(f"  Кросс-валидация ({cv_folds} folds)...", end=" ", flush=True)
                 cv_start = time.time()
+                # CV is on X_train, y_train, not the full dataset X,y
                 cv_results = model.cross_validate(X_train, y_train, cv=cv_folds)
                 cv_time = time.time() - cv_start
                 print(f"({cv_time:.2f}s)")
 
                 print(f"  Accuracy: {metrics['accuracy']:.4f}")
                 print(f"  F1-Score: {metrics['f1']:.4f}")
-                print(f"  CV Score: {cv_results['cv_mean']:.4f}")
+                print(f"  CV Score (Accuracy): {cv_results['cv_mean']:.4f}") # Clarify it's CV Accuracy
 
                 if use_cv_in_scoring:
+                    # Weights are passed from pipeline_config
                     final_score = (
-                        metrics['accuracy'] * 0.5 +
-                        metrics['f1'] * 0.3 +
-                        cv_results['cv_mean'] * 0.2
+                        metrics['accuracy'] * accuracy_weight +
+                        metrics['f1'] * f1_weight +
+                        cv_results['cv_mean'] * cv_weight
                     )
                 else:
+                    # Weights are passed from pipeline_config
                     final_score = (
-                        metrics['accuracy'] * 0.7 +
-                        metrics['f1'] * 0.3
+                        metrics['accuracy'] * accuracy_weight +
+                        metrics['f1'] * f1_weight
                     )
 
                 print(f"  Итоговый скор: {final_score:.4f}")
@@ -372,21 +362,28 @@ class AdaptiveModelSelector:
                 })
 
             except Exception as e:
-                print(f"  Ошибка: {str(e)}")
+                print(f"  Ошибка при обработке модели {model.name}: {str(e)}")
                 continue
 
         print("\nСравнение моделей:")
         print(f"{'Модель':<30} {'Accuracy':<10} {'F1-Score':<10} {'Скор':<10}")
         print("-" * 65)
 
-        for result in sorted(results_table, key=lambda x: x['final_score'], reverse=True):
+        if not results_table:
+            raise ValueError("Ни одна модель не была успешно обучена или оценена!")
+
+        # Sort by final_score in descending order
+        sorted_results = sorted(results_table, key=lambda x: x['final_score'], reverse=True)
+
+        for result in sorted_results:
             print(f"{result['model']:<30} {result['accuracy']:<10.4f} {result['f1']:<10.4f} {result['final_score']:<10.4f}")
 
-        if not results_table:
-            raise ValueError("Ни одна модель не была успешно обучена!")
+        best_result = sorted_results[0]
+        # Find the actual SpecializedModel object
+        best_model = next((m for m in self.models if m.name == best_result['model']), None)
 
-        best_result = max(results_table, key=lambda x: x['final_score'])
-        best_model = next(m for m in self.models if m.name == best_result['model'])
+        if best_model is None:
+            raise RuntimeError(f"Best model '{best_result['model']}' found in results_table but not in registered models.")
 
         self.best_model = best_model
 
@@ -420,33 +417,55 @@ class AdaptiveModelSelector:
                 filepath = os.path.join(directory, f"{model.name}.pkl")
                 model.save(filepath)
                 saved_count += 1
+        print(f"Saved {saved_count} trained models.")
 
         history_path = os.path.join(directory, "selection_history.json")
-        with open(history_path, 'w') as f:
-            json.dump(self.selection_history, f, indent=2)
+        try:
+            with open(history_path, 'w', encoding='utf-8') as f:
+                json.dump(self.selection_history, f, indent=2, ensure_ascii=False)
+            print(f"Saved selection history to {history_path}")
+        except Exception as e:
+            print(f"Error saving selection history: {e}")
+
 
     def load_models(self, directory: str = "saved_models"):
         self.models = []
 
+        if not os.path.exists(directory):
+            print(f"Directory {directory} does not exist. No models to load.")
+            return
+
+        loaded_count = 0
         for filename in os.listdir(directory):
             if filename.endswith('.pkl'):
                 filepath = os.path.join(directory, filename)
-                model = SpecializedModel.load(filepath)
-                self.models.append(model)
+                try:
+                    model = SpecializedModel.load(filepath)
+                    self.models.append(model)
+                    loaded_count += 1
+                except Exception as e:
+                    print(f"Error loading model from {filepath}: {e}")
+        print(f"Loaded {loaded_count} models.")
 
         history_path = os.path.join(directory, "selection_history.json")
         if os.path.exists(history_path):
             try:
-                with open(history_path, 'r') as f:
+                with open(history_path, 'r', encoding='utf-8') as f:
                     history = json.load(f)
+                self.selection_history = history
 
                 if history:
-                    best_history_entry = max(history, key=lambda x: x.get('final_score', 0))
+                    # Find the best model based on the last history entry
+                    # This assumes the latest history reflects the last best selection
+                    best_history_entry = max(history, key=lambda x: x.get('final_score', 0) if x.get('final_score') is not None else -1)
                     best_model_name = best_history_entry['model']
 
                     for model in self.models:
                         if model.name == best_model_name:
                             self.best_model = model
+                            print(f"Set best model to {best_model.name} based on history.")
                             break
             except Exception as e:
-                pass
+                print(f"Error loading selection history from {history_path}: {e}")
+        else:
+            print(f"No selection history found at {history_path}.")
