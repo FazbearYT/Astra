@@ -3,6 +3,7 @@ from typing import Dict, Any, List, Optional
 import json
 import os
 
+
 @dataclass
 class ModelConfig:
     name: str
@@ -11,6 +12,7 @@ class ModelConfig:
     profile_requirements: Dict[str, Any] = field(default_factory=dict)
     description: str = ""
 
+
 @dataclass
 class PipelineConfig:
     models: Dict[str, ModelConfig] = field(default_factory=dict)
@@ -18,7 +20,6 @@ class PipelineConfig:
     scoring: Dict[str, float] = field(default_factory=dict)
 
     def save(self, filepath: str):
-        # Convert ModelConfig objects to dictionaries for JSON serialization
         serializable_models = {k: v.__dict__ for k, v in self.models.items()}
         data = {
             "models": serializable_models,
@@ -33,7 +34,6 @@ class PipelineConfig:
         with open(filepath, 'r', encoding='utf-8') as f:
             data = json.load(f)
         models_data = data.get("models", {})
-        # Convert dictionaries back to ModelConfig objects
         models = {k: ModelConfig(**v) for k, v in models_data.items()}
         return cls(
             models=models,
@@ -41,7 +41,7 @@ class PipelineConfig:
             scoring=data.get("scoring", {})
         )
 
-# --- Default Configurations ---
+
 def get_default_config() -> PipelineConfig:
     return PipelineConfig(
         models={
@@ -69,7 +69,7 @@ def get_default_config() -> PipelineConfig:
             ),
             "LogisticRegression_Specialist": ModelConfig(
                 name="LogisticRegression_Specialist",
-                enabled=False, # Changed to False for faster default
+                enabled=False,
                 params={"solver": "liblinear", "penalty": "l1", "random_state": 42},
                 profile_requirements={
                     "min_samples": 50,
@@ -83,14 +83,15 @@ def get_default_config() -> PipelineConfig:
             "cv_folds": 5,
             "test_size": 0.2,
             "random_state": 42,
-            "use_cv_in_scoring": False # Only use test set for final score
+            "use_cv_in_scoring": False
         },
         scoring={
             "accuracy_weight": 0.7,
             "f1_weight": 0.3,
-            "cv_weight": 0.0 # Only use test set for final score
+            "cv_weight": 0.0
         }
     )
+
 
 def get_fast_config() -> PipelineConfig:
     return PipelineConfig(
@@ -131,8 +132,8 @@ def get_fast_config() -> PipelineConfig:
         }
     )
 
+
 def get_accurate_config() -> PipelineConfig:
-    """Provides a configuration for high-accuracy, comprehensive model search."""
     return PipelineConfig(
         models={
             "RandomForest_Specialist": ModelConfig(
@@ -143,7 +144,7 @@ def get_accurate_config() -> PipelineConfig:
                     "max_depth": 10,
                     "min_samples_leaf": 2,
                     "class_weight": "balanced",
-                    "random_state": 42 # <-- ДОБАВЛЕНО
+                    "random_state": 42
                 },
                 profile_requirements={
                     "min_samples": 100,
@@ -177,7 +178,8 @@ def get_accurate_config() -> PipelineConfig:
             "NeuralNetwork_Specialist": ModelConfig(
                 name="NeuralNetwork_Specialist",
                 enabled=True,
-                params={"hidden_layer_sizes": (50, 25), "max_iter": 500, "activation": "relu", "solver": "adam", "random_state": 42},
+                params={"hidden_layer_sizes": (50, 25), "max_iter": 500, "activation": "relu", "solver": "adam",
+                        "random_state": 42},
                 profile_requirements={
                     "min_samples": 200,
                     "n_features_range": [10, 150],
@@ -188,7 +190,8 @@ def get_accurate_config() -> PipelineConfig:
             "LogisticRegression_Specialist": ModelConfig(
                 name="LogisticRegression_Specialist",
                 enabled=True,
-                params={"solver": "saga", "penalty": "elasticnet", "l1_ratio": 0.5, "max_iter": 200, "random_state": 42},
+                params={"solver": "saga", "penalty": "elasticnet", "l1_ratio": 0.5, "max_iter": 200,
+                        "random_state": 42},
                 profile_requirements={
                     "min_samples": 50,
                     "n_features_range": [2, 100],
@@ -201,7 +204,7 @@ def get_accurate_config() -> PipelineConfig:
             "cv_folds": 10,
             "test_size": 0.2,
             "random_state": 42,
-            "use_cv_in_scoring": True # Use CV score in final model selection
+            "use_cv_in_scoring": True
         },
         scoring={
             "accuracy_weight": 0.5,
@@ -210,13 +213,75 @@ def get_accurate_config() -> PipelineConfig:
         }
     )
 
-def interactive_config() -> PipelineConfig:
-    # This function would allow user to interactively build a config
-    # For now, it returns a default config
-    print("\n[Interactive Configuration Not Yet Implemented, Returning Default Config]")
-    return get_default_config()
 
-# Helper to dynamically get config by name (e.g., from command line or env)
+def interactive_config() -> PipelineConfig:
+    print("\n=== Интерактивная настройка конфигурации ===")
+
+    base_config = get_accurate_config()
+
+    base_config.scoring['accuracy_weight'] = 0.7
+    base_config.scoring['f1_weight'] = 0.3
+    base_config.scoring['cv_weight'] = 0.0
+    base_config.training['use_cv_in_scoring'] = False
+
+    print("\nВыберите модели для включения:")
+    model_names = list(base_config.models.keys())
+    for idx, name in enumerate(model_names, 1):
+        current = base_config.models[name].enabled
+        print(f"{idx}. {name} (сейчас {'вкл' if current else 'выкл'})")
+
+    choice = input(
+        "\nВведите номера моделей для переключения через запятую (или 'all' для всех, 'done' для завершения): ")
+    if choice.lower() == 'all':
+        for name in model_names:
+            base_config.models[name].enabled = True
+    elif choice.lower() != 'done':
+        try:
+            indices = [int(x.strip()) for x in choice.split(',')]
+            for idx in indices:
+                if 1 <= idx <= len(model_names):
+                    base_config.models[model_names[idx - 1]].enabled = not base_config.models[
+                        model_names[idx - 1]].enabled
+        except:
+            print("Неверный ввод, оставляем текущие настройки")
+
+    print("\nНастройка параметров обучения:")
+    try:
+        cv = int(input(f"CV-Folds (сейчас {base_config.training['cv_folds']}): ") or base_config.training['cv_folds'])
+        base_config.training['cv_folds'] = cv
+    except:
+        pass
+
+    use_cv = input(
+        f"Use CV in scoring? (yes/no, сейчас {'yes' if base_config.training.get('use_cv_in_scoring', False) else 'no'}): ").strip().lower()
+    if use_cv in ['yes', 'y']:
+        base_config.training['use_cv_in_scoring'] = True
+    elif use_cv in ['no', 'n']:
+        base_config.training['use_cv_in_scoring'] = False
+
+    print("\nВеса метрик (сумма должна быть 1.0):")
+    try:
+        acc_w = float(
+            input(f"Weight Accuracy (сейчас {base_config.scoring['accuracy_weight']}): ") or base_config.scoring[
+                'accuracy_weight'])
+        f1_w = float(
+            input(f"Weight F1 (сейчас {base_config.scoring['f1_weight']}): ") or base_config.scoring['f1_weight'])
+        cv_w = float(
+            input(f"Weight CV (сейчас {base_config.scoring['cv_weight']}): ") or base_config.scoring['cv_weight'])
+        total = acc_w + f1_w + cv_w
+        if abs(total - 1.0) > 0.01:
+            print(f"Сумма весов {total} не равна 1. Нормируем.")
+            acc_w, f1_w, cv_w = acc_w / total, f1_w / total, cv_w / total
+        base_config.scoring['accuracy_weight'] = acc_w
+        base_config.scoring['f1_weight'] = f1_w
+        base_config.scoring['cv_weight'] = cv_w
+    except:
+        pass
+
+    print("\nИнтерактивная настройка завершена.")
+    return base_config
+
+
 def get_config_by_name(name: str) -> PipelineConfig:
     if name == "default":
         return get_default_config()
