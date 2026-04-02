@@ -1,7 +1,3 @@
-"""
-Модуль адаптивного выбора и управления ML моделями
-"""
-
 import numpy as np
 from typing import Dict, List, Any, Optional
 import joblib
@@ -22,12 +18,9 @@ from sklearn.pipeline import Pipeline
 import warnings
 warnings.filterwarnings('ignore')
 
-# Импорт PipelineConfig для типизации, предполагая, что pipeline_config.py находится в том же каталоге или доступен через sys.path
 try:
     from pipeline_config import ModelConfig, PipelineConfig
 except ImportError:
-    # Fallback for testing or if structure is different
-    # Define a minimal dataclass if PipelineConfig is not directly importable for type hinting
     class ModelConfig:
         name: str
         enabled: bool = True
@@ -39,13 +32,11 @@ except ImportError:
         training: Dict[str, Any] = None
         scoring: Dict[str, float] = None
 
-
 os.environ['OMP_NUM_THREADS'] = str(os.cpu_count())
 os.environ['OPENBLAS_NUM_THREADS'] = str(os.cpu_count())
 os.environ['MKL_NUM_THREADS'] = str(os.cpu_count())
 os.environ['NUMEXPR_NUM_THREADS'] = str(os.cpu_count())
 os.environ['MKL_DYNAMIC'] = 'FALSE'
-
 
 class SpecializedModel:
     def __init__(self, name: str, model: BaseEstimator,
@@ -61,11 +52,7 @@ class SpecializedModel:
 
     def fit(self, X: np.ndarray, y: np.ndarray, **fit_params) -> 'SpecializedModel':
         start_time = time.time()
-        # Handle Pipeline fit_params for steps if present
         if isinstance(self.model, Pipeline):
-            # If the model is a pipeline, pass fit_params to the last step
-            # This is a common pattern, but could be more sophisticated if needed
-            # For simplicity, assuming the last step is the estimator that needs params
             estimator_name = self.model.steps[-1][0]
             step_fit_params = {f"{estimator_name}__{k}": v for k, v in fit_params.items()}
             self.model.fit(X, y, **step_fit_params)
@@ -109,8 +96,6 @@ class SpecializedModel:
         return results
 
     def cross_validate(self, X: np.ndarray, y: np.ndarray, cv: int = 5) -> Dict[str, float]:
-        # Consider using a consistent scoring metric if combined with f1_score later
-        # For now, keeping as accuracy as per original code, but a note for improvement
         scores = cross_val_score(self.model, X, y, cv=cv, scoring='accuracy', n_jobs=-1)
         return {
             'cv_mean': float(scores.mean()),
@@ -129,7 +114,6 @@ class SpecializedModel:
 
         if 'class_balance_min' in self.profile_requirements:
             max_score += 1.0
-            # Ensure class_balance_ratio exists in data_profile
             if data_profile.get('class_balance_ratio') is not None and \
                data_profile['class_balance_ratio'] >= self.profile_requirements['class_balance_min']:
                 score += 1.0
@@ -183,7 +167,6 @@ class SpecializedModel:
         model.training_time = data['training_time']
         return model
 
-
 class AdaptiveModelSelector:
     def __init__(self):
         self.models: List[SpecializedModel] = []
@@ -195,8 +178,6 @@ class AdaptiveModelSelector:
         self.models.append(model)
 
     def _get_sklearn_model_instance(self, model_name: str, params: Dict[str, Any]) -> BaseEstimator:
-        """Helper to create sklearn model instances based on name and parameters."""
-        # Make a copy of params to avoid modifying the original dict during instantiation
         current_params = params.copy()
 
         if model_name == "RandomForest_Specialist":
@@ -222,18 +203,11 @@ class AdaptiveModelSelector:
             raise ValueError(f"Unknown model name or model not implemented for '{model_name}'")
 
     def register_models_from_pipeline_config(self, pipeline_config: PipelineConfig):
-        """
-        Registers models in the selector based on the provided PipelineConfig.
-        This ensures model parameters and profile requirements from the config are used.
-        """
-        self.models = [] # Clear any previously registered models
+        self.models = []
         for model_key, model_cfg in pipeline_config.models.items():
             if model_cfg.enabled:
                 try:
-                    # Create the underlying sklearn model instance with parameters from config
                     sklearn_model_instance = self._get_sklearn_model_instance(model_cfg.name, model_cfg.params)
-
-                    # Create the SpecializedModel wrapper
                     specialized_model = SpecializedModel(
                         name=model_cfg.name,
                         model=sklearn_model_instance,
@@ -249,7 +223,6 @@ class AdaptiveModelSelector:
         if not self.models:
             raise ValueError("No models were enabled or successfully registered from the pipeline config.")
 
-
     def profile_and_select(self, X: np.ndarray, y: np.ndarray,
                           data_profile: Optional[Dict] = None,
                           cv_folds: int = 5,
@@ -263,17 +236,15 @@ class AdaptiveModelSelector:
         print(f"Доступно потоков: {multiprocessing.cpu_count()}")
 
         if data_profile is None:
-            # Create a basic profile if none is provided
             data_profile = {
                 'n_samples': X.shape[0],
                 'n_features': X.shape[1],
-                'data_complexity': 'medium', # Default, ideally profiled
-                'class_balance_ratio': 1.0 # Default, ideally profiled
+                'data_complexity': 'medium',
+                'class_balance_ratio': 1.0
             }
 
         self.data_profile = data_profile
 
-        # It's better to perform the split once here for consistency
         X_train, X_test, y_train, y_test = train_test_split(
             X, y, test_size=0.2, random_state=42, stratify=y
         )
@@ -304,7 +275,6 @@ class AdaptiveModelSelector:
             try:
                 print("  Обучение...", end=" ", flush=True)
                 train_start = time.time()
-                # Pass fit_params if necessary, e.g., sample_weight, but not used here
                 model.fit(X_train, y_train)
                 train_time = time.time() - train_start
                 print(f"({train_time:.2f}s)")
@@ -315,24 +285,21 @@ class AdaptiveModelSelector:
 
                 print(f"  Кросс-валидация ({cv_folds} folds)...", end=" ", flush=True)
                 cv_start = time.time()
-                # CV is on X_train, y_train, not the full dataset X,y
                 cv_results = model.cross_validate(X_train, y_train, cv=cv_folds)
                 cv_time = time.time() - cv_start
                 print(f"({cv_time:.2f}s)")
 
                 print(f"  Accuracy: {metrics['accuracy']:.4f}")
                 print(f"  F1-Score: {metrics['f1']:.4f}")
-                print(f"  CV Score (Accuracy): {cv_results['cv_mean']:.4f}") # Clarify it's CV Accuracy
+                print(f"  CV Score (Accuracy): {cv_results['cv_mean']:.4f}")
 
                 if use_cv_in_scoring:
-                    # Weights are passed from pipeline_config
                     final_score = (
                         metrics['accuracy'] * accuracy_weight +
                         metrics['f1'] * f1_weight +
                         cv_results['cv_mean'] * cv_weight
                     )
                 else:
-                    # Weights are passed from pipeline_config
                     final_score = (
                         metrics['accuracy'] * accuracy_weight +
                         metrics['f1'] * f1_weight
@@ -372,14 +339,12 @@ class AdaptiveModelSelector:
         if not results_table:
             raise ValueError("Ни одна модель не была успешно обучена или оценена!")
 
-        # Sort by final_score in descending order
         sorted_results = sorted(results_table, key=lambda x: x['final_score'], reverse=True)
 
         for result in sorted_results:
             print(f"{result['model']:<30} {result['accuracy']:<10.4f} {result['f1']:<10.4f} {result['final_score']:<10.4f}")
 
         best_result = sorted_results[0]
-        # Find the actual SpecializedModel object
         best_model = next((m for m in self.models if m.name == best_result['model']), None)
 
         if best_model is None:
@@ -427,7 +392,6 @@ class AdaptiveModelSelector:
         except Exception as e:
             print(f"Error saving selection history: {e}")
 
-
     def load_models(self, directory: str = "saved_models"):
         self.models = []
 
@@ -455,8 +419,6 @@ class AdaptiveModelSelector:
                 self.selection_history = history
 
                 if history:
-                    # Find the best model based on the last history entry
-                    # This assumes the latest history reflects the last best selection
                     best_history_entry = max(history, key=lambda x: x.get('final_score', 0) if x.get('final_score') is not None else -1)
                     best_model_name = best_history_entry['model']
 

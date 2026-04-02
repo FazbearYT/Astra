@@ -1,7 +1,3 @@
-"""
-Adaptive ML System - Единая точка входа
-"""
-
 import sys
 import os
 from pathlib import Path
@@ -17,25 +13,21 @@ os.environ['OPENBLAS_NUM_THREADS'] = str(os.cpu_count())
 os.environ['MKL_NUM_THREADS'] = str(os.cpu_count())
 os.environ['NUMEXPR_NUM_THREADS'] = str(os.cpu_count())
 
-# Убедитесь, что каталог src добавлен в sys.path
 script_dir = Path(__file__).parent
 if (script_dir / "src").exists():
     sys.path.insert(0, str(script_dir / "src"))
-else: # If src is not a sub-directory, assume files are in current directory
+else:
     sys.path.insert(0, str(script_dir))
 
-
 from model_profiler import DataProfiler
-from model_selector import AdaptiveModelSelector, SpecializedModel # Import SpecializedModel for type hinting and potential use
+from model_selector import AdaptiveModelSelector, SpecializedModel
 from pipeline_config import PipelineConfig, get_default_config, get_fast_config, get_accurate_config, interactive_config
-# from progress import get_progress_bar, progress_range, progress_context # Assuming these are part of the project but not provided, commenting out to prevent errors if not present
 from sklearn.model_selection import train_test_split
-from sklearn.metrics import accuracy_score, classification_report, confusion_matrix, f1_score # ИСПРАВЛЕНО: Добавлен f1_score
+from sklearn.metrics import accuracy_score, classification_report, confusion_matrix, f1_score
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import seaborn as sns
-
 
 class DataManager:
     def __init__(self, data_dir: Path):
@@ -171,7 +163,6 @@ class DataManager:
 
         return paths
 
-
 class AdaptiveMLApp:
     def __init__(self):
         self.data = None
@@ -181,11 +172,11 @@ class AdaptiveMLApp:
         self.feature_columns = None
         self.profile = None
         self.selector: Optional[AdaptiveModelSelector] = None
-        self.best_model: Optional[SpecializedModel] = None # Added type hint
+        self.best_model: Optional[SpecializedModel] = None
         self.results = {}
         self.output_dir = None
         self.session_id = None
-        self.pipeline_config: Optional[PipelineConfig] = None # Added type hint
+        self.pipeline_config: Optional[PipelineConfig] = None
         self.data_manager = None
 
     def clear_screen(self):
@@ -357,7 +348,7 @@ class AdaptiveMLApp:
         print(f"Найдено сессий: {len(runs)}")
         print("\nПоследние сессии:")
 
-        for run in runs[-5:]: # Show last 5 runs
+        for run in runs[-5:]:
             results_file = run / "results.json"
             if results_file.exists():
                 try:
@@ -368,7 +359,6 @@ class AdaptiveMLApp:
                     print(f"  {run.name}: (Ошибка чтения results.json)")
             else:
                 print(f"  {run.name}: (results.json не найден)")
-
 
         input("\nНажмите Enter для продолжения...")
 
@@ -383,7 +373,6 @@ class AdaptiveMLApp:
         mode_options = ["Быстрая настройка", "Расширенная настройка", "Стандартная (по умолчанию)"]
         mode = self.get_user_choice("\nВыберите режим", mode_options)
 
-
         if mode == 1:
             print("\nПрофиль:")
             print("  1. Быстрый (2 модели, 3 CV)")
@@ -397,7 +386,7 @@ class AdaptiveMLApp:
                 self.pipeline_config = get_fast_config()
             elif profile == 2:
                 self.pipeline_config = get_default_config()
-            else: # profile == 3
+            else:
                 self.pipeline_config = get_accurate_config()
 
             print(f"\nМоделей: {sum(1 for m in self.pipeline_config.models.values() if m.enabled)}")
@@ -405,7 +394,7 @@ class AdaptiveMLApp:
 
         elif mode == 2:
             self.pipeline_config = interactive_config()
-        else: # mode == 3 (Standard/Default)
+        else:
             self.pipeline_config = get_default_config()
 
         config_path = self.output_dir / "pipeline_config.json"
@@ -414,7 +403,6 @@ class AdaptiveMLApp:
             print(f"Конфигурация сохранена: {config_path}")
         except Exception as e:
             print(f"Ошибка сохранения конфигурации: {e}")
-
 
         return True
 
@@ -437,9 +425,9 @@ class AdaptiveMLApp:
                 self.data = self.data_manager.load_dataset(selected['path'])
                 print(f"Загружено {len(self.data)} строк из {selected['name']}")
                 return True
-            elif choice == len(available) + 1: # "Создать тестовые датасеты"
+            elif choice == len(available) + 1:
                 self.create_test_datasets_menu()
-                return self.load_data() # Try loading data again after creation
+                return self.load_data()
 
             return False
 
@@ -499,13 +487,11 @@ class AdaptiveMLApp:
 
         print(f"Признаков: {len(self.feature_columns)}")
         print(f"Образцов: {self.X.shape[0]}")
-        # Handle cases where y might not have multiple unique values (e.g., all same class)
         unique_classes = np.unique(self.y)
         print(f"Классов: {len(unique_classes)}")
         if len(unique_classes) < 2:
             print("Предупреждение: Целевая переменная содержит менее 2 уникальных классов. Это может вызвать проблемы с обучением.")
             return False
-
 
         return True
 
@@ -551,13 +537,11 @@ class AdaptiveMLApp:
             print(f"  Вес F1-Score: {self.pipeline_config.scoring.get('f1_weight', 'N/A')}")
             print(f"  Вес CV Score: {self.pipeline_config.scoring.get('cv_weight', 'N/A')}")
 
-            # --- ИСПРАВЛЕНИЕ: Передача конфигурации моделей в selector ---
             try:
                 self.selector.register_models_from_pipeline_config(self.pipeline_config)
             except ValueError as e:
                 print(f"Ошибка при регистрации моделей из конфигурации: {e}")
                 return False
-            # --- КОНЕЦ ИСПРАВЛЕНИЯ ---
         else:
             print("Конфигурация Pipeline не установлена. Используются стандартные параметры.")
             default_config = get_default_config()
@@ -567,16 +551,12 @@ class AdaptiveMLApp:
             print("Ошибка: Нет моделей для обучения. Проверьте конфигурацию pipeline.")
             return False
 
-
-        # Ensure cv_folds and use_cv are correctly pulled from pipeline_config
         cv_folds = self.pipeline_config.training.get('cv_folds', 5)
         use_cv = self.pipeline_config.training.get('use_cv_in_scoring', False)
         accuracy_weight = self.pipeline_config.scoring.get('accuracy_weight', 0.7)
         f1_weight = self.pipeline_config.scoring.get('f1_weight', 0.3)
         cv_weight = self.pipeline_config.scoring.get('cv_weight', 0.0)
 
-        # The profile_and_select method now takes the full X, y and handles its own split
-        # This is consistent with how the method is designed in model_selector.py
         self.best_model = self.selector.profile_and_select(
             self.X, self.y,
             data_profile=self.profile.to_dict(),
@@ -596,23 +576,17 @@ class AdaptiveMLApp:
             print("Ошибка: Лучшая модель не выбрана.")
             return False
 
-        # Split data again to ensure the same split used for final evaluation,
-        # although selector.profile_and_select already performed one for internal evaluation.
-        # This ensures the external report uses a consistent split.
         X_train_final, X_test_final, y_train_final, y_test_final = train_test_split(
             self.X, self.y, test_size=0.2, random_state=42, stratify=self.y
         )
 
-        # The best_model returned by selector.profile_and_select is already trained on X_train
-        # So we evaluate on X_test_final
         y_pred = self.best_model.predict(X_test_final)
         accuracy = accuracy_score(y_test_final, y_pred)
 
         print(f"\nВыбранная модель: {self.best_model.name}")
         print(f"Итоговая точность на тестовой выборке: {accuracy:.4f} ({accuracy*100:.2f}%)")
         print("\nОтчет по классификации:")
-        print(classification_report(y_test_final, y_pred, zero_division=0)) # Added zero_division to avoid warnings
-
+        print(classification_report(y_test_final, y_pred, zero_division=0))
 
         try:
             cm = confusion_matrix(y_test_final, y_pred)
@@ -629,17 +603,16 @@ class AdaptiveMLApp:
         except Exception as e:
             print(f"Ошибка при создании матрицы ошибок: {e}")
 
-        # Store selected metrics
         self.results = {
             'session_id': self.session_id,
-            'dataset_name': getattr(self.profile, 'dataset_name', 'unknown'), # Get dataset name from profile
+            'dataset_name': getattr(self.profile, 'dataset_name', 'unknown'),
             'target_column': self.target_column,
             'best_model': self.best_model.name,
             'accuracy': float(accuracy),
             'f1_score': float(f1_score(y_test_final, y_pred, average='weighted', zero_division=0)),
             'n_samples': int(self.X.shape[0]),
             'n_features': int(self.X.shape[1]),
-            'timestamp': str(datetime.now().isoformat()) # Use ISO format for better consistency
+            'timestamp': str(datetime.now().isoformat())
         }
 
         results_path = self.output_dir / "results.json"
@@ -658,7 +631,7 @@ class AdaptiveMLApp:
 
         if self.best_model is None:
             print("Невозможно сделать предсказания, лучшая модель не обучена.")
-            return True # Not a critical error to stop the app
+            return True
 
         choice_options = [
             "Ввести данные вручную",
@@ -671,7 +644,7 @@ class AdaptiveMLApp:
             print(f"Введите {len(self.feature_columns)} числовых значений, разделенных пробелами (например, {self.feature_columns}):")
             try:
                 input_str = input("> ").strip()
-                values = [float(v) for v in input_str.replace(',', '.').split()] # Handle comma as decimal separator
+                values = [float(v) for v in input_str.replace(',', '.').split()]
                 if len(values) != len(self.feature_columns):
                     print(f"Ошибка: Ожидалось {len(self.feature_columns)} значений, получено {len(values)}. Попробуйте снова.")
                     return False
@@ -692,7 +665,6 @@ class AdaptiveMLApp:
             if Path(filepath).exists():
                 try:
                     new_data_df = pd.read_csv(filepath)
-                    # Ensure new data has the same feature columns
                     missing_cols = [col for col in self.feature_columns if col not in new_data_df.columns]
                     if missing_cols:
                         print(f"Ошибка: В новом CSV-файле отсутствуют необходимые колонки признаков: {', '.join(missing_cols)}")
@@ -701,7 +673,6 @@ class AdaptiveMLApp:
                     new_x_for_prediction = new_data_df[self.feature_columns].values
                     predictions = self.selector.predict(new_x_for_prediction)
 
-                    # Add predictions and probabilities to a copy of the dataframe
                     output_df = new_data_df.copy()
                     output_df['predicted_target'] = predictions
 
@@ -719,8 +690,8 @@ class AdaptiveMLApp:
                     print(f"Ошибка при обработке CSV-файла для предсказания: {e}")
             else:
                 print(f"Ошибка: Файл '{filepath}' не найден.")
-        elif choice == 3: # Завершить
-            return True # Simply exit prediction flow
+        elif choice == 3:
+            return True
 
         return True
 
@@ -736,7 +707,6 @@ class AdaptiveMLApp:
 
         input("\nНажмите Enter для выхода...")
 
-
     def run(self):
         self.initialize_data_manager()
 
@@ -745,7 +715,6 @@ class AdaptiveMLApp:
 
             if choice == 1:
                 self.run_data_analysis()
-                # run_data_analysis already handles user prompts at the end
             elif choice == 2:
                 self.create_test_datasets_menu()
             elif choice == 3:
@@ -754,11 +723,9 @@ class AdaptiveMLApp:
                 print("\nПрограмма завершена")
                 break
 
-
 def main():
     app = AdaptiveMLApp()
     app.run()
-
 
 if __name__ == "__main__":
     main()
