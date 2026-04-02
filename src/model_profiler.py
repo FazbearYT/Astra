@@ -1,7 +1,3 @@
-"""
-Модуль профилирования данных
-"""
-
 import numpy as np
 import pandas as pd
 import matplotlib
@@ -17,7 +13,6 @@ from datetime import datetime
 import warnings
 warnings.filterwarnings('ignore')
 
-
 @dataclass
 class FeatureProfile:
     name: str
@@ -31,7 +26,6 @@ class FeatureProfile:
     missing_values: int
     outliers_count: int
     correlation_with_target: Optional[float] = None
-
 
 @dataclass
 class DatasetProfile:
@@ -61,7 +55,6 @@ class DatasetProfile:
         with open(filepath, 'r', encoding='utf-8') as f:
             data = json.load(f)
         return cls(**data)
-
 
 class DataProfiler:
     def __init__(self, dataset_name: str = "unknown"):
@@ -289,7 +282,6 @@ class DataProfiler:
         print("\nПредобработка:")
         for need in self.profile.preprocessing_needs:
             print(f"  - {need.replace('_', ' ').title()}")
-
 
 def profile_from_csv(filepath: str, target_column: Optional[str] = None,
                     dataset_name: Optional[str] = None) -> DatasetProfile:
