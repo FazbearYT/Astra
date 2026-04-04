@@ -69,7 +69,7 @@ def get_default_config() -> PipelineConfig:
             ),
             "LogisticRegression_Specialist": ModelConfig(
                 name="LogisticRegression_Specialist",
-                enabled=False,
+                enabled=True,
                 params={"solver": "liblinear", "penalty": "l1", "random_state": 42},
                 profile_requirements={
                     "min_samples": 50,

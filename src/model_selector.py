@@ -245,8 +245,9 @@ class AdaptiveModelSelector:
 
         self.data_profile = data_profile
 
+        stratify_y = y if len(np.unique(y)) > 1 else None
         X_train, X_test, y_train, y_test = train_test_split(
-            X, y, test_size=0.2, random_state=42, stratify=y
+            X, y, test_size=0.2, random_state=42, stratify=stratify_y
         )
 
         print(f"Данные: Train={X_train.shape[0]}, Test={X_test.shape[0]}")

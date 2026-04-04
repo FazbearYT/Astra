@@ -18,7 +18,7 @@ from src.pipeline_config import (
     get_accurate_config
 )
 from sklearn.model_selection import train_test_split
-from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
+from sklearn.metrics import accuracy_score, classification_report, confusion_matrix, f1_score
 import matplotlib
 
 matplotlib.use('Agg')
@@ -263,7 +263,7 @@ def step_pipeline():
     mode = st.radio(
         "Режим настройки:",
         ["Быстрый (2 модели, 3 CV folds)",
-         "Стандартный (5 моделей, 5 CV folds)",
+         "Стандартный (3 модели, 5 CV folds)",
          "Точный (5 моделей, 10 CV folds)",
          "Расширенный (полная настройка)"],
         index=1
@@ -273,10 +273,10 @@ def step_pipeline():
         st.session_state.pipeline_config = get_fast_config()
         st.success("Применён быстрый пресет")
         st.json({"models": 2, "cv_folds": 3, "accuracy_weight": 0.6, "f1_weight": 0.4})
-    elif mode == "Стандартный (5 моделей, 5 CV folds)":
+    elif mode == "Стандартный (3 модели, 5 CV folds)":
         st.session_state.pipeline_config = get_default_config()
         st.success("Применён стандартный пресет")
-        st.json({"models": 5, "cv_folds": 5, "accuracy_weight": 0.7, "f1_weight": 0.3})
+        st.json({"models": 3, "cv_folds": 5, "accuracy_weight": 0.7, "f1_weight": 0.3})
     elif mode == "Точный (5 моделей, 10 CV folds)":
         st.session_state.pipeline_config = get_accurate_config()
         st.success("Применён точный пресет")
@@ -284,7 +284,7 @@ def step_pipeline():
     elif mode == "Расширенный (полная настройка)":
         st.info("Расширенная настройка конфигурации")
 
-        config = get_default_config()
+        config = get_accurate_config()
 
         st.subheader("Выбор моделей (все 5 доступны)")
         for model_key, model_config in config.models.items():
@@ -292,22 +292,25 @@ def step_pipeline():
             config.models[model_key].enabled = enabled
 
         st.subheader("Параметры обучения")
-        config.training['cv_folds'] = st.number_input("CV Folds", min_value=3, max_value=50, value=5, step=1)
-        config.training['test_size'] = st.slider("Test Size", 0.1, 0.4, 0.2, 0.05)
+        config.training['cv_folds'] = st.number_input("CV Folds", min_value=3, max_value=50, value=config.training['cv_folds'], step=1)
+        config.training['test_size'] = st.slider("Test Size", 0.1, 0.4, config.training['test_size'], 0.05)
 
         st.subheader("Веса метрик (сумма = 1.0)")
         col1, col2, col3 = st.columns(3)
         with col1:
-            acc_w = st.number_input("Accuracy", 0.0, 1.0, 0.7, 0.1, key="acc_w")
+            acc_w = st.number_input("Accuracy", 0.0, 1.0, config.scoring['accuracy_weight'], 0.1, key="acc_w")
         with col2:
-            f1_w = st.number_input("F1-Score", 0.0, 1.0, 0.3, 0.1, key="f1_w")
+            f1_w = st.number_input("F1-Score", 0.0, 1.0, config.scoring['f1_weight'], 0.1, key="f1_w")
         with col3:
-            cv_w = st.number_input("CV Score", 0.0, 1.0, 0.0, 0.1, key="cv_w")
+            cv_w = st.number_input("CV Score", 0.0, 1.0, config.scoring['cv_weight'], 0.1, key="cv_w")
 
         total = acc_w + f1_w + cv_w
         if abs(total - 1.0) > 0.01:
-            st.warning(f"Сумма весов: {total:.2f} (должна быть 1.0)")
-            acc_w, f1_w, cv_w = acc_w / total, f1_w / total, cv_w / total
+            st.warning(f"Сумма весов: {total:.2f} (должна быть 1.0, будет произведена нормализация)")
+            if total > 0:
+                acc_w, f1_w, cv_w = acc_w / total, f1_w / total, cv_w / total
+            else:
+                acc_w, f1_w, cv_w = 1/3, 1/3, 1/3
 
         config.scoring['accuracy_weight'] = acc_w
         config.scoring['f1_weight'] = f1_w
@@ -371,48 +374,50 @@ def step_training():
                 numeric_cols = data.select_dtypes(include=[np.number]).columns
                 if len(numeric_cols) > 1:
                     target_column = numeric_cols[-1]
+                    st.warning(f"Целевая колонка не найдена, используется последняя числовая колонка: {target_column}")
                 else:
                     st.error("Не найдена целевая колонка")
                     return
 
             y = data[target_column].values
-            feature_cols = [col for col in data.columns if col != target_column]
-            feature_cols = [col for col in feature_cols if pd.api.types.is_numeric_dtype(data[col])]
+            feature_cols = [col for col in data.columns if col != target_column and pd.api.types.is_numeric_dtype(data[col])]
             X = data[feature_cols].values
 
+            status_text.text("Профилирование данных...")
+            progress_bar.progress(0.1)
             profiler = DataProfiler(dataset_name="Web_Dataset")
             st.session_state.profile = profiler.profile_tabular_data(X, y, feature_names=feature_cols)
+            progress_bar.progress(0.2)
 
             selector = AdaptiveModelSelector()
+            selector.register_models_from_pipeline_config(config)
 
-            enabled_models = [k for k, v in config.models.items() if v.enabled]
-
-            total_models = len(enabled_models)
-            for idx, model_name in enumerate(enabled_models):
-                status_text.text(f"Обучение модели {idx + 1}/{total_models}: {model_name}...")
-                progress_bar.progress((idx + 1) / total_models)
-                time.sleep(0.5)
+            enabled_models_count = len([m for m in config.models.values() if m.enabled])
+            status_text.text(f"Подготовка к обучению {enabled_models_count} моделей...")
 
             X_train, X_test, y_train, y_test = train_test_split(
                 X, y, test_size=config.training.get('test_size', 0.2),
-                random_state=42, stratify=y
+                random_state=42, stratify=y if len(np.unique(y)) > 1 else None
             )
 
-            cv_folds = config.training.get('cv_folds', 5)
-            use_cv = config.training.get('use_cv_in_scoring', False)
+            with st.spinner("Идет процесс выбора и обучения моделей... Это может занять некоторое время."):
+                st.session_state.best_model = selector.profile_and_select(
+                    X, y,
+                    data_profile=st.session_state.profile.to_dict(),
+                    cv_folds=config.training.get('cv_folds', 5),
+                    use_cv_in_scoring=config.training.get('use_cv_in_scoring', False),
+                    accuracy_weight=config.scoring.get('accuracy_weight', 0.7),
+                    f1_weight=config.scoring.get('f1_weight', 0.3),
+                    cv_weight=config.scoring.get('cv_weight', 0.0)
+                )
 
-            st.session_state.best_model = selector.profile_and_select(
-                X, y,
-                data_profile=st.session_state.profile.to_dict(),
-                cv_folds=cv_folds,
-                use_cv_in_scoring=use_cv
-            )
-
-            y_pred = selector.predict(X_test)
+            y_pred = st.session_state.best_model.predict(X_test)
             accuracy = accuracy_score(y_test, y_pred)
+            f1 = f1_score(y_test, y_pred, average='weighted', zero_division=0)
 
             st.session_state.results = {
                 'accuracy': float(accuracy),
+                'f1': float(f1),
                 'best_model': st.session_state.best_model.name,
                 'n_samples': int(X.shape[0]),
                 'n_features': int(X.shape[1]),
@@ -423,11 +428,10 @@ def step_training():
             progress_bar.progress(1.0)
             status_text.text("Обучение завершено!")
 
-            st.success(f"Обучение завершено! Accuracy: {accuracy:.4f}")
+            st.success(f"Обучение завершено! Лучшая модель: {st.session_state.best_model.name}, Accuracy: {accuracy:.4f}")
 
-            if st.button("Показать результаты", type="primary"):
-                st.session_state.step = 3
-                st.rerun()
+            st.session_state.step = 3
+            st.rerun()
 
         except Exception as e:
             st.error(f"Ошибка: {e}")
@@ -460,7 +464,7 @@ def step_results():
     with col2:
         st.metric("Accuracy", f"{results['accuracy']:.4f}")
     with col3:
-        st.metric("F1-Score", f"{results.get('f1', results['accuracy']):.4f}")
+        st.metric("F1-Score", f"{results.get('f1', 0.0):.4f}")
 
     if st.session_state.profile:
         st.subheader("Профиль данных")
@@ -472,7 +476,7 @@ def step_results():
             "data_complexity": profile_data['data_complexity']
         })
 
-    st.info("Результаты сохранены в outputs/")
+    st.info("Результаты и артефакты (модели, графики) сохраняются в директорию `outputs/`")
 
     if st.button("Начать заново"):
         reset_session()
