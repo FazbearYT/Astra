@@ -1,7 +1,3 @@
-"""
-Adaptive ML System - Core Modules
-"""
-
 __version__ = "2.0.0"
 __author__ = "Adaptive ML Team"
 

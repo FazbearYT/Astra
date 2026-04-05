@@ -1,6 +1,7 @@
 import numpy as np
 import pandas as pd
 import matplotlib
+
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import seaborn as sns
@@ -10,7 +11,9 @@ import json
 from dataclasses import dataclass, asdict
 from datetime import datetime
 import warnings
+
 warnings.filterwarnings('ignore')
+
 
 @dataclass
 class FeatureProfile:
@@ -25,6 +28,7 @@ class FeatureProfile:
     missing_values: int
     outliers_count: int
     correlation_with_target: Optional[float] = None
+
 
 @dataclass
 class DatasetProfile:
@@ -55,15 +59,16 @@ class DatasetProfile:
             data = json.load(f)
         return cls(**data)
 
+
 class DataProfiler:
     def __init__(self, dataset_name: str = "unknown"):
         self.dataset_name = dataset_name
         self.profile = None
 
     def profile_tabular_data(self, X: np.ndarray, y: Optional[np.ndarray] = None,
-                            feature_names: Optional[List[str]] = None) -> DatasetProfile:
-        if X.dtype == object or X.dtype.kind == 'U':
-            X = X.astype(np.float64)
+                             feature_names: Optional[List[str]] = None) -> DatasetProfile:
+        if not np.issubdtype(X.dtype, np.number):
+            raise TypeError("Input array X must be numeric.")
         if feature_names is None:
             feature_names = [f"feature_{i}" for i in range(X.shape[1])]
 
@@ -149,17 +154,19 @@ class DataProfiler:
         return int(np.sum((feature < lower_bound) | (feature > upper_bound)))
 
     def _assess_complexity(self, n_samples: int, n_features: int) -> str:
-        ratio = n_samples / n_features if n_features > 0 else 0
-        if ratio < 50:
+        if n_features == 0:
             return "simple"
-        elif ratio < 200:
+        ratio = n_samples / n_features
+        if ratio < 10:
+            return "high"
+        elif ratio < 100:
             return "medium"
         else:
-            return "complex"
+            return "low"
 
     def _recommend_models(self, complexity: str, balance_ratio: Optional[float]) -> List[str]:
         recommendations = []
-        if complexity == "simple":
+        if complexity == "low":
             recommendations.extend(["RandomForest", "SVM", "LogisticRegression"])
         elif complexity == "medium":
             recommendations.extend(["GradientBoosting", "RandomForest", "NeuralNetwork"])
@@ -170,14 +177,13 @@ class DataProfiler:
         return list(set(recommendations))
 
     def _detect_preprocessing_needs(self, X: np.ndarray,
-                                   feature_profiles: List[FeatureProfile]) -> List[str]:
+                                    feature_profiles: List[FeatureProfile]) -> List[str]:
         needs = []
         stds = [fp.std for fp in feature_profiles if fp.std > 1e-9]
-        if len(stds) > 0:
+        if len(stds) > 1:
             if max(stds) / min(stds) > 10:
                 needs.append("feature_scaling")
-        else:
-            needs.append("feature_scaling")
+
         skewness_values = [abs(fp.skewness) for fp in feature_profiles]
         if any(s > 1 for s in skewness_values):
             needs.append("skewness_correction")
@@ -194,7 +200,7 @@ class DataProfiler:
         fig, axes = plt.subplots(2, 2, figsize=(14, 10))
         fig.suptitle(f'Профиль датасета: {self.dataset_name}', fontsize=16, fontweight='bold')
         axes[0, 0].hist([fp.mean for fp in self.profile.feature_profiles],
-                       bins=20, color='steelblue', alpha=0.7)
+                        bins=20, color='steelblue', alpha=0.7)
         axes[0, 0].set_title('Распределение средних значений признаков')
         axes[0, 0].set_xlabel('Среднее')
         axes[0, 0].set_ylabel('Частота')

@@ -21,7 +21,6 @@ else:
 from model_profiler import DataProfiler
 from model_selector import AdaptiveModelSelector, SpecializedModel
 from pipeline_config import PipelineConfig, get_default_config, get_fast_config, get_accurate_config, interactive_config
-from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score, classification_report, confusion_matrix, f1_score
 import matplotlib
 matplotlib.use('Agg')
@@ -128,6 +127,8 @@ class AdaptiveMLApp:
         self.data = None
         self.X = None
         self.y = None
+        self.X_test = None
+        self.y_test = None
         self.target_column = None
         self.feature_columns = None
         self.profile = None
@@ -402,7 +403,11 @@ class AdaptiveMLApp:
         accuracy_weight = self.pipeline_config.scoring.get('accuracy_weight', 0.7)
         f1_weight = self.pipeline_config.scoring.get('f1_weight', 0.3)
         cv_weight = self.pipeline_config.scoring.get('cv_weight', 0.0)
-        self.best_model = self.selector.profile_and_select(self.X, self.y, data_profile=self.profile.to_dict(), cv_folds=cv_folds, use_cv_in_scoring=use_cv, accuracy_weight=accuracy_weight, f1_weight=f1_weight, cv_weight=cv_weight)
+        self.best_model, self.X_test, self.y_test = self.selector.profile_and_select(
+            self.X, self.y, data_profile=self.profile.to_dict(), cv_folds=cv_folds,
+            use_cv_in_scoring=use_cv, accuracy_weight=accuracy_weight, f1_weight=f1_weight,
+            cv_weight=cv_weight
+        )
         return True
 
     def evaluate_and_show_results(self):
@@ -410,15 +415,18 @@ class AdaptiveMLApp:
         if self.best_model is None:
             print("Ошибка: Лучшая модель не выбрана. ")
             return False
-        X_train_final, X_test_final, y_train_final, y_test_final = train_test_split(self.X, self.y, test_size=0.2, random_state=42, stratify=self.y)
-        y_pred = self.best_model.predict(X_test_final)
-        accuracy = accuracy_score(y_test_final, y_pred)
+
+        y_pred = self.best_model.predict(self.X_test)
+        accuracy = accuracy_score(self.y_test, y_pred)
+        f1 = f1_score(self.y_test, y_pred, average='weighted', zero_division=0)
+
         print(f"\nВыбранная модель: {self.best_model.name} ")
-        print(f"Итоговая точность на тестовой выборке: {accuracy:.4f} ({accuracy*100:.2f}%) ")
+        print(f"Итоговая точность на отложенной тестовой выборке: {accuracy:.4f} ({accuracy*100:.2f}%) ")
+        print(f"Итоговый F1-Score на отложенной тестовой выборке: {f1:.4f} ")
         print("\nОтчет по классификации: ")
-        print(classification_report(y_test_final, y_pred, zero_division=0))
+        print(classification_report(self.y_test, y_pred, zero_division=0))
         try:
-            cm = confusion_matrix(y_test_final, y_pred)
+            cm = confusion_matrix(self.y_test, y_pred)
             fig, ax = plt.subplots(figsize=(8, 6))
             sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', ax=ax, xticklabels=np.unique(self.y), yticklabels=np.unique(self.y))
             ax.set_title(f'Матрица ошибок - {self.best_model.name}')
@@ -436,7 +444,7 @@ class AdaptiveMLApp:
             'target_column': self.target_column,
             'best_model': self.best_model.name,
             'accuracy': float(accuracy),
-            'f1_score': float(f1_score(y_test_final, y_pred, average='weighted', zero_division=0)),
+            'f1_score': float(f1),
             'n_samples': int(self.X.shape[0]),
             'n_features': int(self.X.shape[1]),
             'timestamp': str(datetime.now().isoformat())
@@ -458,7 +466,7 @@ class AdaptiveMLApp:
         choice_options = ["Ввести данные вручную ", "Загрузить данные из CSV-файла ", "Завершить "]
         choice = self.get_user_choice("\nДействие ", choice_options)
         if choice == 1:
-            print(f"Введите {len(self.feature_columns)} числовых значений, разделенных пробелами (например, {self.feature_columns}): ")
+            print(f"Введите {len(self.feature_columns)} числовых значений, разделенных пробелами (например, {', '.join(self.feature_columns[:3])}...): ")
             try:
                 input_str = input("> ").strip()
                 values = [float(v) for v in input_str.replace(',', '.').split()]
@@ -487,10 +495,10 @@ class AdaptiveMLApp:
                     predictions = self.selector.predict(new_x_for_prediction)
                     output_df = new_data_df.copy()
                     output_df['predicted_target'] = predictions
-                    if hasattr(self.best_model, 'predict_proba'):
+                    if hasattr(self.best_model.model, 'predict_proba'):
                         probabilities = self.best_model.predict_proba(new_x_for_prediction)
-                        for i, prob_col in enumerate(probabilities.T):
-                            output_df[f'probability_class_{i}'] = prob_col
+                        for i, class_label in enumerate(self.best_model.model.classes_):
+                             output_df[f'probability_class_{class_label}'] = probabilities[:, i]
                     output_path = self.output_dir / f"predictions_{Path(filepath).stem}.csv"
                     output_df.to_csv(output_path, index=False, encoding='utf-8')
                     print(f"Предсказания сохранены в: {output_path} ")
@@ -509,7 +517,8 @@ class AdaptiveMLApp:
         if self.best_model and self.results:
             print(f"Выбранная модель: {self.best_model.name} ")
             print(f"Итоговая точность: {self.results['accuracy']*100:.2f}% ")
-            print(f"Итоговый F1-Score: {self.results.get('f1_score', 'N/A')*100:.2f}% ")
+            f1 = self.results.get('f1_score', 0.0)
+            print(f"Итоговый F1-Score: {f1*100:.2f}% ")
             print(f"\nВсе результаты и артефакты сохранены в: {self.output_dir} ")
         else:
             print("Не удалось завершить анализ или получить результаты. ")

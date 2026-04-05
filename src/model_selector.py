@@ -1,5 +1,5 @@
 import numpy as np
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, Tuple
 import joblib
 import os
 import json
@@ -17,46 +17,17 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.pipeline import Pipeline
 import warnings
 warnings.filterwarnings('ignore')
-
 os.environ['OMP_NUM_THREADS'] = str(os.cpu_count() or 4)
 os.environ['OPENBLAS_NUM_THREADS'] = str(os.cpu_count() or 4)
 os.environ['MKL_NUM_THREADS'] = str(os.cpu_count() or 4)
 os.environ['NUMEXPR_NUM_THREADS'] = str(os.cpu_count() or 4)
 os.environ['MKL_DYNAMIC'] = 'FALSE'
 
-def _evaluate_single_model(model, X_train, y_train, X_test, y_test, cv_folds, use_cv, acc_w, f1_w, cv_w):
-    train_start = time.time()
-    model.fit(X_train, y_train)
-    train_time = time.time() - train_start
-
-    y_pred = model.predict(X_test)
-    metrics = {
-        'accuracy': accuracy_score(y_test, y_pred),
-        'precision': precision_score(y_test, y_pred, average='weighted', zero_division=0),
-        'recall': recall_score(y_test, y_pred, average='weighted', zero_division=0),
-        'f1': f1_score(y_test, y_pred, average='weighted', zero_division=0)
-    }
-
-    cv_results = model.cross_validate(X_train, y_train, cv=cv_folds)
-    cv_mean = cv_results['cv_mean']
-
-    if use_cv:
-        final_score = metrics['accuracy'] * acc_w + metrics['f1'] * f1_w + cv_mean * cv_w
-    else:
-        final_score = metrics['accuracy'] * acc_w + metrics['f1'] * f1_w
-
-    return {
-        'model': model,
-        'metrics': metrics,
-        'cv_results': cv_results,
-        'final_score': final_score,
-        'training_time': train_time
-    }
-
 class SpecializedModel:
     def __init__(self, name: str, model: BaseEstimator,
-                profile_requirements: Dict[str, Any],
-                description: str = ""):
+                 profile_requirements: Dict[str, Any],
+                 description: str = "",
+                 custom_scoring_weights: Optional[Dict[str, float]] = None):
         self.name = name
         self.model = model
         self.profile_requirements = profile_requirements
@@ -64,6 +35,7 @@ class SpecializedModel:
         self.performance_metrics = {}
         self.is_trained = False
         self.training_time = None
+        self.custom_scoring_weights = custom_scoring_weights or {}
 
     def fit(self, X: np.ndarray, y: np.ndarray, **fit_params) -> 'SpecializedModel':
         start_time = time.time()
@@ -79,16 +51,22 @@ class SpecializedModel:
 
     def predict(self, X: np.ndarray) -> np.ndarray:
         if not self.is_trained:
-            raise ValueError(f"Модель {self.name} не обучена!")
-        return self.model.predict(X)
+            raise ValueError(f"Model {self.name} not trained!")
+        try:
+            return self.model.predict(X)
+        except Exception as e:
+            raise RuntimeError(f"Prediction error for {self.name}: {e}")
 
     def predict_proba(self, X: np.ndarray) -> np.ndarray:
         if not self.is_trained:
-            raise ValueError(f"Модель {self.name} не обучена!")
-        if hasattr(self.model, 'predict_proba'):
-            return self.model.predict_proba(X)
-        else:
-            raise AttributeError(f"Модель {self.name} не поддерживает predict_proba")
+            raise ValueError(f"Model {self.name} not trained!")
+        try:
+            if hasattr(self.model, 'predict_proba'):
+                return self.model.predict_proba(X)
+            else:
+                raise AttributeError(f"Model {self.name} does not support predict_proba")
+        except Exception as e:
+            raise RuntimeError(f"Probability prediction error for {self.name}: {e}")
 
     def evaluate(self, X: np.ndarray, y: np.ndarray,
                 metrics: Optional[List[str]] = None) -> Dict[str, float]:
@@ -97,7 +75,7 @@ class SpecializedModel:
         y_pred = self.predict(X)
         results = {}
         if 'accuracy' in metrics:
-            results['accuracy'] = accuracy_score(y, y_pred)
+             results['accuracy'] = accuracy_score(y, y_pred)
         if 'precision' in metrics:
             results['precision'] = precision_score(y, y_pred, average='weighted', zero_division=0)
         if 'recall' in metrics:
@@ -146,18 +124,20 @@ class SpecializedModel:
             'profile_requirements': self.profile_requirements,
             'performance_metrics': self.performance_metrics,
             'is_trained': self.is_trained,
-            'training_time': self.training_time
+            'training_time': self.training_time,
+            'custom_scoring_weights': self.custom_scoring_weights
         }
 
     def save(self, filepath: str):
         joblib.dump({
-            'name': self.name,
+             'name': self.name,
             'model': self.model,
             'profile_requirements': self.profile_requirements,
             'description': self.description,
             'performance_metrics': self.performance_metrics,
             'is_trained': self.is_trained,
-            'training_time': self.training_time
+            'training_time': self.training_time,
+            'custom_scoring_weights': self.custom_scoring_weights
         }, filepath)
 
     @classmethod
@@ -167,7 +147,8 @@ class SpecializedModel:
             name=data['name'],
             model=data['model'],
             profile_requirements=data['profile_requirements'],
-            description=data['description']
+            description=data['description'],
+            custom_scoring_weights=data.get('custom_scoring_weights')
         )
         model.performance_metrics = data['performance_metrics']
         model.is_trained = data['is_trained']
@@ -206,7 +187,7 @@ class AdaptiveModelSelector:
                 ('lr', LogisticRegression(**current_params))
             ])
         else:
-            raise ValueError(f"Unknown model name or model not implemented for '{model_name}'")
+            raise ValueError(f"Unknown model name: '{model_name}'")
 
     def register_models_from_pipeline_config(self, pipeline_config):
         self.models = []
@@ -218,7 +199,8 @@ class AdaptiveModelSelector:
                         name=model_cfg.name,
                         model=sklearn_model_instance,
                         profile_requirements=model_cfg.profile_requirements,
-                        description=model_cfg.description
+                        description=model_cfg.description,
+                        custom_scoring_weights=model_cfg.custom_scoring_weights
                     )
                     self.register_model(specialized_model)
                 except (ValueError, TypeError):
@@ -229,12 +211,12 @@ class AdaptiveModelSelector:
     def profile_and_select(self, X: np.ndarray, y: np.ndarray,
                           data_profile: Optional[Dict] = None,
                           cv_folds: int = 5,
-                           use_cv_in_scoring: bool = False,
-                          accuracy_weight: float = 0.7,
-                          f1_weight: float = 0.3,
-                          cv_weight: float = 0.0) -> SpecializedModel:
-        print("\nАдаптивный выбор модели ")
-        print(f"Доступно потоков: {os.cpu_count()} ")
+                          use_cv_in_scoring: bool = False,
+                          global_accuracy_weight: float = 0.7,
+                          global_f1_weight: float = 0.3,
+                          global_cv_weight: float = 0.0) -> Tuple[SpecializedModel, np.ndarray, np.ndarray]:
+        print("\nAdaptive model selection")
+        print(f"Available threads: {os.cpu_count()}")
 
         if data_profile is None:
             data_profile = {
@@ -250,101 +232,120 @@ class AdaptiveModelSelector:
             X, y, test_size=0.2, random_state=42, stratify=stratify_y
         )
 
-        print(f"Данные: Train={X_train.shape[0]}, Test={X_test.shape[0]} ")
-        print("\nОценка соответствия моделей: ")
+        print(f"Data: Train={X_train.shape[0]}, Test={X_test.shape[0]}")
+        print("\nEvaluating model profiles:")
         model_scores = []
         if not self.models:
-            raise ValueError("No models are registered for selection. Please register models first.")
+            raise ValueError("No models are registered for selection.")
 
         for model in self.models:
             profile_score = model.matches_profile(data_profile)
             model_scores.append((model, profile_score))
-            print(f"  {model.name}: {profile_score:.3f} ")
+            print(f"  {model.name}: {profile_score:.3f}")
 
         model_scores.sort(key=lambda x: x[1], reverse=True)
-        print("\nТестирование моделей: ")
-
-        tasks = []
-        for model, profile_score in model_scores:
-            tasks.append((model, X_train, y_train, X_test, y_test, cv_folds, use_cv_in_scoring, accuracy_weight, f1_weight, cv_weight, profile_score))
+        print("\nTesting models:")
 
         results_table = []
-        try:
-            parallel_results = joblib.Parallel(n_jobs=-1, backend='loky')(
-                joblib.delayed(_evaluate_single_model)(
-                    t[0], t[1], t[2], t[3], t[4], t[5], t[6], t[7], t[8], t[9]
-                ) for t in tasks
-            )
-        except Exception:
-            parallel_results = [_evaluate_single_model(*t[:10]) for t in tasks]
+        total_models = len(model_scores)
 
-        for idx, (res, (_, profile_score)) in enumerate(zip(parallel_results, model_scores), 1):
-            model = res['model']
-            print(f"\n[{idx}/{len(model_scores)}] {model.name} ")
-            print(f"  Обучение... ({res['training_time']:.2f}s) ")
-            print(f"  Оценка... готово ")
-            print(f"  Кросс-валидация ({cv_folds} folds)... готово ")
-            print(f"  Accuracy: {res['metrics']['accuracy']:.4f} ")
-            print(f"  F1-Score: {res['metrics']['f1']:.4f} ")
-            print(f"  CV Score (Accuracy): {res['cv_results']['cv_mean']:.4f} ")
-            print(f"  Итоговый скор: {res['final_score']:.4f} ")
+        for idx, (model, profile_score) in enumerate(model_scores, 1):
+            print(f"\n[{idx}/{total_models}] {model.name}")
+            try:
+                print("  Training...", end="   ", flush=True)
+                train_start = time.time()
+                model.fit(X_train, y_train)
+                train_time = time.time() - train_start
+                print(f"({train_time:.2f}s)")
 
-            model.is_trained = True
-            model.training_time = res['training_time']
-            model.performance_metrics.update(res['metrics'])
+                print("  Evaluating...", end="   ", flush=True)
+                metrics = model.evaluate(X_test, y_test)
+                print("done")
 
-            results_table.append({
-                'model': model.name,
-                'profile_score': profile_score,
-                'accuracy': res['metrics']['accuracy'],
-                'f1': res['metrics']['f1'],
-                'precision': res['metrics']['precision'],
-                'recall': res['metrics']['recall'],
-                'cv_mean': res['cv_results']['cv_mean'],
-                'final_score': res['final_score'],
-                'training_time': res['training_time']
-            })
+                print(f"  Cross-validation ({cv_folds} folds)...", end="   ", flush=True)
+                cv_start = time.time()
+                cv_results = model.cross_validate(X_train, y_train, cv=cv_folds)
+                cv_time = time.time() - cv_start
+                print(f"({cv_time:.2f}s)")
 
-            self.selection_history.append({
-                'model': model.name,
-                'profile_score': profile_score,
-                'metrics': res['metrics'],
-                'cv_results': res['cv_results'],
-                'final_score': res['final_score'],
-                'timestamp': datetime.now().isoformat()
-            })
+                print(f"  Accuracy: {metrics['accuracy']:.4f}")
+                print(f"  F1-Score: {metrics['f1']:.4f}")
+                print(f"  CV Score (Accuracy): {cv_results['cv_mean']:.4f}")
 
-        print("\nСравнение моделей: ")
-        print(f"{'Модель': <30} {'Accuracy': <10} {'F1-Score': <10} {'Скор': <10} ")
+                acc_w = model.custom_scoring_weights.get('accuracy_weight', global_accuracy_weight)
+                f1_w = model.custom_scoring_weights.get('f1_weight', global_f1_weight)
+                cv_w = model.custom_scoring_weights.get('cv_weight', global_cv_weight)
+
+                if use_cv_in_scoring:
+                    final_score = (
+                        metrics['accuracy'] * acc_w +
+                        metrics['f1'] * f1_w +
+                        cv_results['cv_mean'] * cv_w
+                    )
+                else:
+                    final_score = (
+                        metrics['accuracy'] * acc_w +
+                        metrics['f1'] * f1_w
+                    )
+
+                print(f"  Final Score: {final_score:.4f}")
+
+                results_table.append({
+                    'model': model.name,
+                    'profile_score': profile_score,
+                    'accuracy': metrics['accuracy'],
+                    'f1': metrics['f1'],
+                    'precision': metrics['precision'],
+                    'recall': metrics['recall'],
+                    'cv_mean': cv_results['cv_mean'],
+                    'final_score': final_score,
+                    'training_time': train_time
+                })
+
+                self.selection_history.append({
+                    'model': model.name,
+                    'profile_score': profile_score,
+                    'metrics': metrics,
+                    'cv_results': cv_results,
+                    'final_score': final_score,
+                    'timestamp': datetime.now().isoformat()
+                })
+
+            except Exception as e:
+                print(f"  Error processing model {model.name}: {str(e)}")
+                continue
+
+        print("\nModel Comparison:")
+        print(f"{'Model':<30} {'Accuracy':<10} {'F1-Score':<10} {'Score':<10}")
         print("-" * 65)
 
         if not results_table:
-            raise ValueError("Ни одна модель не была успешно обучена или оценена!")
+            raise ValueError("No models were successfully trained or evaluated!")
 
         sorted_results = sorted(results_table, key=lambda x: x['final_score'], reverse=True)
         for result in sorted_results:
-            print(f"{result['model']: <30} {result['accuracy']: <10.4f} {result['f1']: <10.4f} {result['final_score']: <10.4f} ")
+            print(f"{result['model']:<30} {result['accuracy']:<10.4f} {result['f1']:<10.4f} {result['final_score']:<10.4f}")
 
         best_result = sorted_results[0]
         best_model = next((m for m in self.models if m.name == best_result['model']), None)
 
         if best_model is None:
-            raise RuntimeError(f"Best model '{best_result['model']}' found in results_table but not in registered models.")
+            raise RuntimeError(f"Best model '{best_result['model']}' found in results but not registered.")
 
         self.best_model = best_model
-        print(f"\nВыбрана модель: {best_model.name} ")
-        print(f"Accuracy: {best_result['accuracy']:.4f} ")
-        print(f"F1-Score: {best_result['f1']:.4f} ")
-        return best_model
+        print(f"\nSelected model: {best_model.name}")
+        print(f"Accuracy: {best_result['accuracy']:.4f}")
+        print(f"F1-Score: {best_result['f1']:.4f}")
+        return best_model, X_test, y_test
 
     def predict(self, X: np.ndarray) -> np.ndarray:
         if self.best_model is None:
-            raise ValueError("Сначала выполните profile_and_select()!")
+            raise ValueError("Run profile_and_select() first!")
         return self.best_model.predict(X)
 
     def predict_proba(self, X: np.ndarray) -> np.ndarray:
         if self.best_model is None:
-            raise ValueError("Сначала выполните profile_and_select()!")
+            raise ValueError("Run profile_and_select() first!")
         return self.best_model.predict_proba(X)
 
     def get_model_info(self) -> Dict[str, Any]:
@@ -360,19 +361,19 @@ class AdaptiveModelSelector:
                 filepath = os.path.join(directory, f"{model.name}.pkl")
                 model.save(filepath)
                 saved_count += 1
-        print(f"Saved {saved_count} trained models. ")
+        print(f"Saved {saved_count} trained models.")
         history_path = os.path.join(directory, "selection_history.json")
         try:
             with open(history_path, 'w', encoding='utf-8') as f:
                 json.dump(self.selection_history, f, indent=2, ensure_ascii=False)
-            print(f"Saved selection history to {history_path} ")
+            print(f"Saved selection history to {history_path}")
         except Exception:
             pass
 
     def load_models(self, directory: str = "saved_models"):
         self.models = []
         if not os.path.exists(directory):
-            print(f"Directory {directory} does not exist. No models to load. ")
+            print(f"Directory {directory} does not exist.")
             return
         loaded_count = 0
         for filename in os.listdir(directory):
@@ -384,7 +385,7 @@ class AdaptiveModelSelector:
                     loaded_count += 1
                 except Exception:
                     pass
-        print(f"Loaded {loaded_count} models. ")
+        print(f"Loaded {loaded_count} models.")
         history_path = os.path.join(directory, "selection_history.json")
         if os.path.exists(history_path):
             try:
@@ -397,7 +398,7 @@ class AdaptiveModelSelector:
                     for model in self.models:
                         if model.name == best_model_name:
                             self.best_model = model
-                            print(f"Set best model to {best_model.name} based on history. ")
+                            print(f"Set best model to {best_model.name} based on history.")
                             break
             except Exception:
                 pass
