@@ -1,4 +1,3 @@
-
 # Adaptive ML System
 
 Автоматическая система выбора ML-моделей на основе профилирования данных.
@@ -31,8 +30,14 @@ pip install -r requirements.txt
 
 ### Запуск
 
+**Консольная версия:**
 ```bash
 python app.py
+```
+
+**Веб-интерфейс (Streamlit):**
+```bash
+streamlit run web_app.py
 ```
 
 ### Создание тестовых данных
@@ -43,8 +48,11 @@ python app.py
 → Выбрать датасет (1-7)
 ```
 
+Или в веб-интерфейсе: вкладка "Create Test"
+
 ### Анализ данных
 
+**Консоль:**
 ```
 1. Запустить анализ данных
 → Настроить pipeline
@@ -52,11 +60,14 @@ python app.py
 → Получить результаты
 ```
 
+**Веб-интерфейс:** Пошаговый мастер (выбор данных → настройка → обучение → результаты)
+
 ## Структура проекта
 
 ```
 adaptive_ml_system/
-├── app.py                    # Главный файл
+├── app.py                    # Консольное приложение
+├── web_app.py                # Веб-интерфейс (Streamlit)
 ├── requirements.txt          # Зависимости
 ├── src/
 │   ├── model_profiler.py     # Профилирование данных
@@ -108,8 +119,15 @@ adaptive_ml_system/
 ## Требования
 
 - Python 3.8+
-- numpy, pandas, scikit-learn, matplotlib, seaborn
+- numpy, pandas, scikit-learn, matplotlib, seaborn, streamlit
 
 ```bash
 pip install -r requirements.txt
 ```
+
+## Режимы работы
+
+Система поддерживает два интерфейса:
+
+1. **Консольный** (`app.py`) — консольное меню с пошаговым управлением
+2. **Веб-интерфейс** (`web_app.py`) — современный UI на базе Streamlit с визуализацией результатов
