@@ -1,7 +1,3 @@
-"""
-Модуль прогресс-баров
-"""
-
 import sys
 from typing import Optional, Iterable
 from contextlib import contextmanager
