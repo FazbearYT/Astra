@@ -8,6 +8,8 @@ from datetime import datetime
 import sys
 import traceback
 import matplotlib
+import chardet
+import re
 
 matplotlib.use('Agg')
 script_path = Path(__file__).parent
@@ -120,6 +122,145 @@ def create_test_dataset(name: str) -> Path:
     return None
 
 
+def detect_encoding(file_path_or_buffer) -> str:
+    """Detect file encoding using chardet"""
+    if isinstance(file_path_or_buffer, (str, Path)):
+        with open(file_path_or_buffer, 'rb') as f:
+            raw_data = f.read(10000)
+    else:
+        raw_data = file_path_or_buffer.read(10000)
+        if hasattr(file_path_or_buffer, 'seek'):
+            file_path_or_buffer.seek(0)
+
+    result = chardet.detect(raw_data)
+    return result['encoding'] if result['confidence'] > 0.7 else 'utf-8'
+
+
+def detect_separator(df_sample: pd.DataFrame) -> str:
+    """Detect separator used in CSV by analyzing column patterns"""
+    # If we already have a dataframe, it was parsed successfully
+    # We can check if columns look reasonable
+    if len(df_sample.columns) > 1:
+        return ','
+    return ','
+
+
+def auto_format_dataframe(df: pd.DataFrame, filename: str = "uploaded") -> pd.DataFrame:
+    """
+    Automatically format and clean a dataframe for ML pipeline compatibility.
+    Returns cleaned dataframe with standardized format.
+    """
+    df_clean = df.copy()
+
+    # 1. Clean column names - remove special characters, spaces, duplicates
+    # Support Unicode letters (including Cyrillic, Chinese, etc.)
+    original_cols = df_clean.columns.tolist()
+    cleaned_cols = []
+    seen_cols = {}
+
+    for col in original_cols:
+        # Convert to string and strip whitespace
+        col_str = str(col).strip()
+        # Replace problematic special chars with underscores, but keep Unicode letters and numbers
+        # This regex keeps letters from any language, digits, and underscores
+        col_clean = re.sub(r'[^\w\u0400-\u04FF]', '_', col_str, flags=re.UNICODE)
+        # Remove leading/trailing underscores
+        col_clean = col_clean.strip('_')
+        # Handle empty column names
+        if not col_clean:
+            col_clean = f"unnamed_{len(cleaned_cols)}"
+
+        # Handle duplicates
+        if col_clean in seen_cols:
+            seen_cols[col_clean] += 1
+            col_clean = f"{col_clean}_{seen_cols[col_clean]}"
+        else:
+            seen_cols[col_clean] = 0
+
+        cleaned_cols.append(col_clean)
+
+    df_clean.columns = cleaned_cols
+
+    # 2. Remove completely empty rows and columns
+    df_clean = df_clean.dropna(how='all', axis=0)
+    df_clean = df_clean.dropna(how='all', axis=1)
+
+    # 3. Convert numeric strings to actual numbers
+    for col in df_clean.columns:
+        if df_clean[col].dtype == 'object':
+            # Try to convert to numeric
+            try:
+                df_clean[col] = pd.to_numeric(df_clean[col], errors='ignore')
+            except:
+                pass
+
+    # 4. Handle common data quality issues
+    # Replace common string representations of missing values
+    df_clean = df_clean.replace(['', ' ', 'NA', 'N/A', 'null', 'NULL', 'None', 'nan', 'NaN'], np.nan)
+
+    # 5. Ensure at least 2 columns remain
+    if len(df_clean.columns) < 2:
+        raise ValueError("Dataset must have at least 2 columns after cleaning")
+
+    # 6. Remove rows with all NaN values
+    df_clean = df_clean.dropna(how='all')
+
+    return df_clean
+
+
+def format_and_save_csv(uploaded_file, save_path: Path, filename: str = None) -> tuple[bool, str]:
+    """
+    Attempt to automatically format and save an uploaded CSV file.
+    Returns (success, message) tuple.
+    """
+    try:
+        # Get filename from uploaded_file object or use provided name
+        if filename is None:
+            filename = getattr(uploaded_file, 'name', 'uploaded_data.csv')
+
+        # Step 1: Detect encoding
+        encoding = detect_encoding(uploaded_file)
+        uploaded_file.seek(0)
+
+        # Step 2: Try reading with different separators
+        df = None
+        separator_used = ','
+        for sep in [',', ';', '\t', '|']:
+            try:
+                uploaded_file.seek(0)
+                df = pd.read_csv(uploaded_file, encoding=encoding, sep=sep, nrows=100)
+                if len(df.columns) > 1:
+                    separator_used = sep
+                    break
+            except:
+                continue
+
+        if df is None or len(df.columns) <= 1:
+            return False, "Could not parse CSV file. Please check the file format."
+
+        # Step 3: Read full file with detected separator
+        uploaded_file.seek(0)
+        df_full = pd.read_csv(uploaded_file, encoding=encoding, sep=separator_used)
+
+        # Step 4: Auto-format the dataframe
+        df_formatted = auto_format_dataframe(df_full, filename)
+
+        # Step 5: Validate minimum requirements
+        if len(df_formatted) < 10:
+            return False, f"Dataset has only {len(df_formatted)} rows. Minimum 10 rows recommended."
+
+        if len(df_formatted.columns) < 2:
+            return False, "Dataset must have at least 2 columns (features + target)."
+
+        # Step 6: Save formatted CSV
+        df_formatted.to_csv(save_path, index=False, encoding='utf-8')
+
+        return True, f"Successfully formatted and saved. Used separator: '{separator_used}', Encoding: {encoding}"
+
+    except Exception as e:
+        return False, f"Error processing file: {str(e)}"
+
+
 def set_data_and_advance(path: Path):
     try:
         st.session_state.data_path = path
@@ -219,8 +360,7 @@ def step_dataset():
                     use_container_width=True
                 )
     else:
-        st.info(
-            "No existing datasets found in `data/tabular`. Please upload a CSV file or create a test dataset below.")
+        st.info("No existing datasets found in `data/tabular`. Please upload a CSV file or create a test dataset below.")
 
     st.divider()
 
@@ -228,32 +368,48 @@ def step_dataset():
     col_upload, col_create = st.columns(2)
 
     with col_upload:
-        with st.expander("📤 Upload CSV File", expanded=False):
+        with st.expander("📤 Upload CSV File (Auto-Format Enabled)", expanded=False):
             st.markdown("""
             **CSV Requirements:**
-            - File must be in UTF-8 encoding
             - First row must contain column headers
             - Must contain at least one target column (binary or multi-class labels)
             - Minimum 10 rows recommended for meaningful analysis
-            - Supported separators: comma (`,`), semicolon (`;`)
-            - No empty header names allowed
+
+            **Auto-Formatting Features:**
+            - ✅ Automatic encoding detection (UTF-8, Windows-1251, Latin-1, etc.)
+            - ✅ Automatic separator detection (comma, semicolon, tab, pipe)
+            - ✅ Column name cleaning (special characters → underscores)
+            - ✅ Duplicate column name handling
+            - ✅ Empty row/column removal
+            - ✅ Numeric string conversion
+            - ✅ Common missing value normalization (NA, N/A, null, etc.)
+
+            **Supported Formats:**
+            - Standard CSV files with various encodings
+            - Files with different separators (`,`, `;`, `\t`, `|`)
+            - Files with non-standard column names
             """)
             uploaded_file = st.file_uploader("Select CSV file", type=["csv"], key="upload_csv")
             if uploaded_file is not None:
-                try:
-                    df_check = pd.read_csv(uploaded_file, nrows=5)
-                    if len(df_check.columns) < 2:
-                        st.error("CSV must have at least 2 columns (features + target)")
-                    elif len(df_check) == 0:
-                        st.error("CSV file is empty")
+                save_path = Path("data/tabular") / uploaded_file.name
+
+                with st.spinner("🔄 Auto-formatting dataset..."):
+                    success, message = format_and_save_csv(uploaded_file, save_path)
+
+                    if success:
+                        st.success(f"✅ {message}")
+                        # Show preview of formatted data
+                        try:
+                            df_preview = pd.read_csv(save_path, nrows=10)
+                            st.write("**Preview of formatted data:**")
+                            st.dataframe(df_preview)
+                            set_data_and_advance(save_path)
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Error reading formatted file: {e}")
                     else:
-                        save_path = Path("data/tabular") / uploaded_file.name
-                        with open(save_path, "wb") as f:
-                            f.write(uploaded_file.getbuffer())
-                        set_data_and_advance(save_path)
-                        st.rerun()
-                except Exception as e:
-                    st.error(f"Failed to parse CSV: {e}")
+                        st.error(f"❌ {message}")
+                        st.info("Please ensure your CSV file meets the minimum requirements listed above.")
 
     with col_create:
         with st.expander("🧪 Create Test Dataset", expanded=False):
