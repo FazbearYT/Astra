@@ -203,40 +203,69 @@ def main():
 def step_dataset():
     st.header("Step 1: Select Data")
     st.progress(0.25)
-    tab1, tab2, tab3 = st.tabs(["Create Test", "Select Existing", "Upload CSV"])
-    with tab1:
-        st.subheader("Create and use a test dataset")
-        test_datasets = ["Iris", "Wine", "Digits", "Titanic", "Synthetic", "Large"]
-        for ds_name in test_datasets:
-            if st.button(f"Create '{ds_name}'", key=f"create_{ds_name}", use_container_width=True):
-                with st.spinner(f"Creating '{ds_name}'..."):
-                    path = create_test_dataset(ds_name)
-                    if path:
-                        set_data_and_advance(path)
-                        st.rerun()
-    with tab2:
-        st.subheader("Select existing dataset from `data/tabular`")
-        datasets = get_available_datasets()
-        if datasets:
-            for ds in datasets:
+
+    # Основной раздел: Выбор существующих датасетов
+    st.subheader("Available Datasets")
+    datasets = get_available_datasets()
+    if datasets:
+        cols = st.columns(min(3, len(datasets)))
+        for idx, ds in enumerate(datasets):
+            with cols[idx % len(cols)]:
                 st.button(
-                    f"Use '{ds['name']}' ({ds['cols']} columns)",
+                    f"📊 {ds['name']}\n({ds['cols']} columns)",
                     key=f"load_{ds['name']}",
                     on_click=set_data_and_advance,
                     args=(ds['path'],),
                     use_container_width=True
                 )
-        else:
-            st.warning("No datasets available. Create or upload one.")
-    with tab3:
-        st.subheader("Upload your CSV file")
-        uploaded_file = st.file_uploader("Select CSV file", type=["csv"])
-        if uploaded_file is not None:
-            save_path = Path("data/tabular") / uploaded_file.name
-            with open(save_path, "wb") as f:
-                f.write(uploaded_file.getbuffer())
-            set_data_and_advance(save_path)
-            st.rerun()
+    else:
+        st.info(
+            "No existing datasets found in `data/tabular`. Please upload a CSV file or create a test dataset below.")
+
+    st.divider()
+
+    # Опции: Загрузка CSV и создание тестового датасета
+    col_upload, col_create = st.columns(2)
+
+    with col_upload:
+        with st.expander("📤 Upload CSV File", expanded=False):
+            st.markdown("""
+            **CSV Requirements:**
+            - File must be in UTF-8 encoding
+            - First row must contain column headers
+            - Must contain at least one target column (binary or multi-class labels)
+            - Minimum 10 rows recommended for meaningful analysis
+            - Supported separators: comma (`,`), semicolon (`;`)
+            - No empty header names allowed
+            """)
+            uploaded_file = st.file_uploader("Select CSV file", type=["csv"], key="upload_csv")
+            if uploaded_file is not None:
+                try:
+                    df_check = pd.read_csv(uploaded_file, nrows=5)
+                    if len(df_check.columns) < 2:
+                        st.error("CSV must have at least 2 columns (features + target)")
+                    elif len(df_check) == 0:
+                        st.error("CSV file is empty")
+                    else:
+                        save_path = Path("data/tabular") / uploaded_file.name
+                        with open(save_path, "wb") as f:
+                            f.write(uploaded_file.getbuffer())
+                        set_data_and_advance(save_path)
+                        st.rerun()
+                except Exception as e:
+                    st.error(f"Failed to parse CSV: {e}")
+
+    with col_create:
+        with st.expander("🧪 Create Test Dataset", expanded=False):
+            st.markdown("Generate synthetic datasets for testing and demonstration purposes.")
+            test_datasets = ["Iris", "Wine", "Digits", "Titanic", "Synthetic", "Large"]
+            for ds_name in test_datasets:
+                if st.button(f"Create '{ds_name}'", key=f"create_{ds_name}", use_container_width=True):
+                    with st.spinner(f"Creating '{ds_name}'..."):
+                        path = create_test_dataset(ds_name)
+                        if path:
+                            set_data_and_advance(path)
+                            st.rerun()
 
 
 def step_pipeline():
