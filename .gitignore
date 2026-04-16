@@ -1,1 +1,76 @@
-(empty)
+develop_tests/
+test.*
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+venv/
+ENV/
+env/
+.venv/
+
+# IDE
+/.idea/
+.vscode/
+*.swp
+*.swo
+*~
+test.py
+# Jupyter
+.ipynb_checkpoints/
+
+# Models (large files)
+models/*.pkl
+models/*.pt
+models/*.h5
+models/*.onnx
+*.pth
+
+# Datasets (large files)
+data/
+data/oxford_flowers_raw/
+data/oxford_flowers/images/
+data/oxford_flowers/*/images/*
+*.tgz
+*.mat
+
+# Logs
+logs/
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Testing
+outputs/
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# Documentation
+docs/_build/
+
+# Environment
+.env
+.env.local
