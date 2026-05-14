@@ -7,21 +7,25 @@ import time
 from datetime import datetime
 from sklearn.base import BaseEstimator
 from sklearn.model_selection import cross_val_score, train_test_split
-from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
-from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
-from sklearn.svm import SVC
-from sklearn.neural_network import MLPClassifier
-from sklearn.linear_model import LogisticRegression
-from sklearn.neighbors import KNeighborsClassifier
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, r2_score, mean_squared_error, \
+    mean_absolute_error
+from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier, RandomForestRegressor, \
+    GradientBoostingRegressor
+from sklearn.svm import SVC, SVR
+from sklearn.neural_network import MLPClassifier, MLPRegressor
+from sklearn.linear_model import LogisticRegression, Ridge, Lasso
+from sklearn.neighbors import KNeighborsClassifier, KNeighborsRegressor
 from sklearn.preprocessing import StandardScaler
 from sklearn.pipeline import Pipeline
 import warnings
+
 warnings.filterwarnings('ignore')
 os.environ['OMP_NUM_THREADS'] = str(os.cpu_count() or 4)
 os.environ['OPENBLAS_NUM_THREADS'] = str(os.cpu_count() or 4)
 os.environ['MKL_NUM_THREADS'] = str(os.cpu_count() or 4)
 os.environ['NUMEXPR_NUM_THREADS'] = str(os.cpu_count() or 4)
 os.environ['MKL_DYNAMIC'] = 'FALSE'
+
 
 class SpecializedModel:
     def __init__(self, name: str, model: BaseEstimator,
@@ -69,24 +73,43 @@ class SpecializedModel:
             raise RuntimeError(f"Probability prediction error for {self.name}: {e}")
 
     def evaluate(self, X: np.ndarray, y: np.ndarray,
-                metrics: Optional[List[str]] = None) -> Dict[str, float]:
-        if metrics is None:
-            metrics = ['accuracy', 'precision', 'recall', 'f1']
+                 metrics: Optional[List[str]] = None, task_type: str = 'classification') -> Dict[str, float]:
         y_pred = self.predict(X)
         results = {}
-        if 'accuracy' in metrics:
-             results['accuracy'] = accuracy_score(y, y_pred)
-        if 'precision' in metrics:
-            results['precision'] = precision_score(y, y_pred, average='weighted', zero_division=0)
-        if 'recall' in metrics:
-            results['recall'] = recall_score(y, y_pred, average='weighted', zero_division=0)
-        if 'f1' in metrics:
-            results['f1'] = f1_score(y, y_pred, average='weighted', zero_division=0)
+
+        if task_type == 'classification':
+            if metrics is None:
+                metrics = ['accuracy', 'precision', 'recall', 'f1']
+            if 'accuracy' in metrics:
+                results['accuracy'] = accuracy_score(y, y_pred)
+            if 'precision' in metrics:
+                results['precision'] = precision_score(y, y_pred, average='weighted', zero_division=0)
+            if 'recall' in metrics:
+                results['recall'] = recall_score(y, y_pred, average='weighted', zero_division=0)
+            if 'f1' in metrics:
+                results['f1'] = f1_score(y, y_pred, average='weighted', zero_division=0)
+        else:
+            if metrics is None:
+                metrics = ['r2', 'mse', 'mae']
+            if 'r2' in metrics:
+                results['r2'] = r2_score(y, y_pred)
+            if 'mse' in metrics:
+                results['mse'] = mean_squared_error(y, y_pred)
+            if 'rmse' in metrics:
+                results['rmse'] = np.sqrt(mean_squared_error(y, y_pred))
+            if 'mae' in metrics:
+                results['mae'] = mean_absolute_error(y, y_pred)
+
         self.performance_metrics.update(results)
         return results
 
-    def cross_validate(self, X: np.ndarray, y: np.ndarray, cv: int = 5) -> Dict[str, float]:
-        scores = cross_val_score(self.model, X, y, cv=cv, scoring='accuracy', n_jobs=-1)
+    def cross_validate(self, X: np.ndarray, y: np.ndarray, cv: int = 5, task_type: str = 'classification') -> Dict[
+        str, float]:
+        if task_type == 'classification':
+            scoring = 'accuracy'
+        else:
+            scoring = 'r2'
+        scores = cross_val_score(self.model, X, y, cv=cv, scoring=scoring, n_jobs=-1)
         return {
             'cv_mean': float(scores.mean()),
             'cv_std': float(scores.std()),
@@ -103,7 +126,7 @@ class SpecializedModel:
         if 'class_balance_min' in self.profile_requirements:
             max_score += 1.0
             if data_profile.get('class_balance_ratio') is not None and \
-               data_profile['class_balance_ratio'] >= self.profile_requirements['class_balance_min']:
+                    data_profile['class_balance_ratio'] >= self.profile_requirements['class_balance_min']:
                 score += 1.0
         if 'min_samples' in self.profile_requirements:
             max_score += 1.0
@@ -130,7 +153,7 @@ class SpecializedModel:
 
     def save(self, filepath: str):
         joblib.dump({
-             'name': self.name,
+            'name': self.name,
             'model': self.model,
             'profile_requirements': self.profile_requirements,
             'description': self.description,
@@ -155,6 +178,7 @@ class SpecializedModel:
         model.training_time = data['training_time']
         return model
 
+
 class AdaptiveModelSelector:
     def __init__(self):
         self.models: List[SpecializedModel] = []
@@ -165,36 +189,63 @@ class AdaptiveModelSelector:
     def register_model(self, model: SpecializedModel):
         self.models.append(model)
 
-    def _get_sklearn_model_instance(self, model_name: str, params: Dict[str, Any]) -> BaseEstimator:
+    def _get_sklearn_model_instance(self, model_name: str, params: Dict[str, Any],
+                                    task_type: str = 'classification') -> BaseEstimator:
         current_params = params.copy()
-        if model_name == "RandomForest_Specialist":
-            return RandomForestClassifier(**current_params)
-        elif model_name == "SVM_Specialist":
-            return Pipeline([
-                ('scaler', StandardScaler()),
-                ('svc', SVC(**current_params))
-            ])
-        elif model_name == "GradientBoosting_Specialist":
-            return GradientBoostingClassifier(**current_params)
-        elif model_name == "NeuralNetwork_Specialist":
-            return Pipeline([
-                ('scaler', StandardScaler()),
-                ('mlp', MLPClassifier(**current_params))
-            ])
-        elif model_name == "LogisticRegression_Specialist":
-            return Pipeline([
-                ('scaler', StandardScaler()),
-                ('lr', LogisticRegression(**current_params))
-            ])
+        if task_type == 'classification':
+            if model_name == "RandomForest_Specialist":
+                return RandomForestClassifier(**current_params)
+            elif model_name == "SVM_Specialist":
+                return Pipeline([
+                    ('scaler', StandardScaler()),
+                    ('svc', SVC(**current_params))
+                ])
+            elif model_name == "GradientBoosting_Specialist":
+                return GradientBoostingClassifier(**current_params)
+            elif model_name == "NeuralNetwork_Specialist":
+                return Pipeline([
+                    ('scaler', StandardScaler()),
+                    ('mlp', MLPClassifier(**current_params))
+                ])
+            elif model_name == "LogisticRegression_Specialist":
+                return Pipeline([
+                    ('scaler', StandardScaler()),
+                    ('lr', LogisticRegression(**current_params))
+                ])
         else:
-            raise ValueError(f"Unknown model name: '{model_name}'")
+            if model_name == "RandomForest_Specialist":
+                return RandomForestRegressor(**current_params)
+            elif model_name == "SVM_Specialist":
+                return Pipeline([
+                    ('scaler', StandardScaler()),
+                    ('svr', SVR(**current_params))
+                ])
+            elif model_name == "GradientBoosting_Specialist":
+                return GradientBoostingRegressor(**current_params)
+            elif model_name == "NeuralNetwork_Specialist":
+                return Pipeline([
+                    ('scaler', StandardScaler()),
+                    ('mlp', MLPRegressor(**current_params))
+                ])
+            elif model_name == "Ridge_Specialist":
+                return Pipeline([
+                    ('scaler', StandardScaler()),
+                    ('ridge', Ridge(**current_params))
+                ])
+            elif model_name == "Lasso_Specialist":
+                return Pipeline([
+                    ('scaler', StandardScaler()),
+                    ('lasso', Lasso(**current_params))
+                ])
+        raise ValueError(f"Unknown model name: '{model_name}' for task type: '{task_type}'")
 
-    def register_models_from_pipeline_config(self, pipeline_config):
+    def register_models_from_pipeline_config(self, pipeline_config, task_type: str = 'classification'):
         self.models = []
         for model_key, model_cfg in pipeline_config.models.items():
             if model_cfg.enabled:
                 try:
-                    sklearn_model_instance = self._get_sklearn_model_instance(model_cfg.name, model_cfg.params)
+                    sklearn_model_instance = self._get_sklearn_model_instance(model_cfg.name, model_cfg.params,
+                                                                              task_type)
                     specialized_model = SpecializedModel(
                         name=model_cfg.name,
                         model=sklearn_model_instance,
@@ -209,12 +260,12 @@ class AdaptiveModelSelector:
             raise ValueError("No models were enabled or successfully registered from the pipeline config.")
 
     def profile_and_select(self, X: np.ndarray, y: np.ndarray,
-                          data_profile: Optional[Dict] = None,
-                          cv_folds: int = 5,
-                          use_cv_in_scoring: bool = False,
-                          global_accuracy_weight: float = 0.7,
-                          global_f1_weight: float = 0.3,
-                          global_cv_weight: float = 0.0) -> Tuple[SpecializedModel, np.ndarray, np.ndarray]:
+                           data_profile: Optional[Dict] = None,
+                           cv_folds: int = 5,
+                           use_cv_in_scoring: bool = False,
+                           global_accuracy_weight: float = 0.7,
+                           global_f1_weight: float = 0.3,
+                           global_cv_weight: float = 0.0) -> Tuple[SpecializedModel, np.ndarray, np.ndarray]:
         print("\nAdaptive model selection")
         print(f"Available threads: {os.cpu_count()}")
 
@@ -223,16 +274,23 @@ class AdaptiveModelSelector:
                 'n_samples': X.shape[0],
                 'n_features': X.shape[1],
                 'data_complexity': 'medium',
-                'class_balance_ratio': 1.0
+                'class_balance_ratio': 1.0,
+                'task_type': 'classification'
             }
 
         self.data_profile = data_profile
-        stratify_y = y if len(np.unique(y)) > 1 else None
+        task_type = data_profile.get('task_type', 'classification')
+
+        stratify_y = None
+        if task_type == 'classification' and len(np.unique(y)) > 1:
+            stratify_y = y
+
         X_train, X_test, y_train, y_test = train_test_split(
             X, y, test_size=0.2, random_state=42, stratify=stratify_y
         )
 
         print(f"Data: Train={X_train.shape[0]}, Test={X_test.shape[0]}")
+        print(f"Task type: {task_type}")
         print("\nEvaluating model profiles:")
         model_scores = []
         if not self.models:
@@ -259,44 +317,65 @@ class AdaptiveModelSelector:
                 print(f"({train_time:.2f}s)")
 
                 print("  Evaluating...", end="   ", flush=True)
-                metrics = model.evaluate(X_test, y_test)
+                metrics = model.evaluate(X_test, y_test, task_type=task_type)
                 print("done")
 
                 print(f"  Cross-validation ({cv_folds} folds)...", end="   ", flush=True)
                 cv_start = time.time()
-                cv_results = model.cross_validate(X_train, y_train, cv=cv_folds)
+                cv_results = model.cross_validate(X_train, y_train, cv=cv_folds, task_type=task_type)
                 cv_time = time.time() - cv_start
                 print(f"({cv_time:.2f}s)")
 
-                print(f"  Accuracy: {metrics['accuracy']:.4f}")
-                print(f"  F1-Score: {metrics['f1']:.4f}")
-                print(f"  CV Score (Accuracy): {cv_results['cv_mean']:.4f}")
+                if task_type == 'classification':
+                    print(f"  Accuracy: {metrics.get('accuracy', 0):.4f}")
+                    print(f"  F1-Score: {metrics.get('f1', 0):.4f}")
+                    print(f"  CV Score (Accuracy): {cv_results['cv_mean']:.4f}")
 
-                acc_w = model.custom_scoring_weights.get('accuracy_weight', global_accuracy_weight)
-                f1_w = model.custom_scoring_weights.get('f1_weight', global_f1_weight)
-                cv_w = model.custom_scoring_weights.get('cv_weight', global_cv_weight)
+                    acc_w = model.custom_scoring_weights.get('accuracy_weight', global_accuracy_weight)
+                    f1_w = model.custom_scoring_weights.get('f1_weight', global_f1_weight)
+                    cv_w = model.custom_scoring_weights.get('cv_weight', global_cv_weight)
 
-                if use_cv_in_scoring:
-                    final_score = (
-                        metrics['accuracy'] * acc_w +
-                        metrics['f1'] * f1_w +
-                        cv_results['cv_mean'] * cv_w
-                    )
+                    if use_cv_in_scoring:
+                        final_score = (
+                                metrics.get('accuracy', 0) * acc_w +
+                                metrics.get('f1', 0) * f1_w +
+                                cv_results['cv_mean'] * cv_w
+                        )
+                    else:
+                        final_score = (
+                                metrics.get('accuracy', 0) * acc_w +
+                                metrics.get('f1', 0) * f1_w
+                        )
                 else:
-                    final_score = (
-                        metrics['accuracy'] * acc_w +
-                        metrics['f1'] * f1_w
-                    )
+                    print(f"  R² Score: {metrics.get('r2', 0):.4f}")
+                    print(f"  RMSE: {metrics.get('rmse', 0):.4f}")
+                    print(f"  CV Score (R²): {cv_results['cv_mean']:.4f}")
+
+                    r2_w = model.custom_scoring_weights.get('r2_weight', global_accuracy_weight)
+                    rmse_w = model.custom_scoring_weights.get('rmse_weight', global_f1_weight)
+                    cv_w = model.custom_scoring_weights.get('cv_weight', global_cv_weight)
+
+                    rmse_score = 1 / (1 + metrics.get('rmse', 1))
+
+                    if use_cv_in_scoring:
+                        final_score = (
+                                metrics.get('r2', 0) * r2_w +
+                                rmse_score * rmse_w +
+                                cv_results['cv_mean'] * cv_w
+                        )
+                    else:
+                        final_score = (
+                                metrics.get('r2', 0) * r2_w +
+                                rmse_score * rmse_w
+                        )
 
                 print(f"  Final Score: {final_score:.4f}")
 
                 results_table.append({
                     'model': model.name,
                     'profile_score': profile_score,
-                    'accuracy': metrics['accuracy'],
-                    'f1': metrics['f1'],
-                    'precision': metrics['precision'],
-                    'recall': metrics['recall'],
+                    'task_type': task_type,
+                    **metrics,
                     'cv_mean': cv_results['cv_mean'],
                     'final_score': final_score,
                     'training_time': train_time
@@ -308,6 +387,7 @@ class AdaptiveModelSelector:
                     'metrics': metrics,
                     'cv_results': cv_results,
                     'final_score': final_score,
+                    'task_type': task_type,
                     'timestamp': datetime.now().isoformat()
                 })
 
@@ -316,15 +396,24 @@ class AdaptiveModelSelector:
                 continue
 
         print("\nModel Comparison:")
-        print(f"{'Model':<30} {'Accuracy':<10} {'F1-Score':<10} {'Score':<10}")
-        print("-" * 65)
+        if task_type == 'classification':
+            print(f"{'Model':<30} {'Accuracy':<10} {'F1-Score':<10} {'Score':<10}")
+            print("-" * 65)
+        else:
+            print(f"{'Model':<30} {'R²':<10} {'RMSE':<10} {'Score':<10}")
+            print("-" * 65)
 
         if not results_table:
             raise ValueError("No models were successfully trained or evaluated!")
 
         sorted_results = sorted(results_table, key=lambda x: x['final_score'], reverse=True)
         for result in sorted_results:
-            print(f"{result['model']:<30} {result['accuracy']:<10.4f} {result['f1']:<10.4f} {result['final_score']:<10.4f}")
+            if task_type == 'classification':
+                print(
+                    f"{result['model']:<30} {result.get('accuracy', 0):<10.4f} {result.get('f1', 0):<10.4f} {result['final_score']:<10.4f}")
+            else:
+                print(
+                    f"{result['model']:<30} {result.get('r2', 0):<10.4f} {result.get('rmse', 0):<10.4f} {result['final_score']:<10.4f}")
 
         best_result = sorted_results[0]
         best_model = next((m for m in self.models if m.name == best_result['model']), None)
@@ -393,7 +482,8 @@ class AdaptiveModelSelector:
                     history = json.load(f)
                 self.selection_history = history
                 if history:
-                    best_history_entry = max(history, key=lambda x: x.get('final_score', 0) if x.get('final_score') is not None else -1)
+                    best_history_entry = max(history, key=lambda x: x.get('final_score', 0) if x.get(
+                        'final_score') is not None else -1)
                     best_model_name = best_history_entry['model']
                     for model in self.models:
                         if model.name == best_model_name:

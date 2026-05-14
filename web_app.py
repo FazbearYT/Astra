@@ -181,11 +181,9 @@ def auto_format_dataframe(df: pd.DataFrame, filename: str = "uploaded") -> pd.Da
 
     df_clean.columns = cleaned_cols
 
-    # 2. Remove completely empty rows and columns
     df_clean = df_clean.dropna(how='all', axis=0)
     df_clean = df_clean.dropna(how='all', axis=1)
 
-    # 3. Convert numeric strings to actual numbers
     for col in df_clean.columns:
         if df_clean[col].dtype == 'object':
             # Try to convert to numeric
@@ -194,15 +192,11 @@ def auto_format_dataframe(df: pd.DataFrame, filename: str = "uploaded") -> pd.Da
             except:
                 pass
 
-    # 4. Handle common data quality issues
-    # Replace common string representations of missing values
     df_clean = df_clean.replace(['', ' ', 'NA', 'N/A', 'null', 'NULL', 'None', 'nan', 'NaN'], np.nan)
 
-    # 5. Ensure at least 2 columns remain
     if len(df_clean.columns) < 2:
         raise ValueError("Dataset must have at least 2 columns after cleaning")
 
-    # 6. Remove rows with all NaN values
     df_clean = df_clean.dropna(how='all')
 
     return df_clean
@@ -214,7 +208,6 @@ def format_and_save_csv(uploaded_file, save_path: Path, filename: str = None) ->
     Returns (success, message) tuple.
     """
     try:
-        # Get filename from uploaded_file object or use provided name
         if filename is None:
             filename = getattr(uploaded_file, 'name', 'uploaded_data.csv')
 
@@ -345,7 +338,6 @@ def step_dataset():
     st.header("Step 1: Select Data")
     st.progress(0.25)
 
-    # Основной раздел: Выбор существующих датасетов
     st.subheader("Available Datasets")
     datasets = get_available_datasets()
     if datasets:
@@ -360,7 +352,8 @@ def step_dataset():
                     use_container_width=True
                 )
     else:
-        st.info("No existing datasets found in `data/tabular`. Please upload a CSV file or create a test dataset below.")
+        st.info(
+            "No existing datasets found in `data/tabular`. Please upload a CSV file or create a test dataset below.")
 
     st.divider()
 
@@ -702,11 +695,10 @@ def step_results():
                 st.markdown(
                     f"{entry['model']:<30} {entry['metrics']['accuracy']:<10.4f} {entry['metrics']['f1']:<10.4f} {entry['final_score']:<10.4f}")
             st.markdown("```")
-    st.info("Results and artifacts saved to `outputs/`")
-    if st.button("Start New Analysis", type="primary"):
-        reset_session()
-        st.rerun()
+        st.info("Results and artifacts saved to `outputs/`")
+        if st.button("Start New Analysis", type="primary"):
+            reset_session()
+            st.rerun()
 
-
-if __name__ == "__main__":
-    main()
+    if __name__ == "__main__":
+        main()
