@@ -11,6 +11,7 @@ import json
 from dataclasses import dataclass, asdict
 from datetime import datetime
 import warnings
+from sklearn.utils.multiclass import type_of_target
 
 warnings.filterwarnings('ignore')
 
@@ -45,6 +46,7 @@ class DatasetProfile:
     preprocessing_needs: List[str]
     created_at: str
     dataset_name: str
+    task_type: str  # 'classification' or 'regression'
 
     def to_dict(self) -> Dict:
         return asdict(self)
@@ -114,11 +116,18 @@ class DataProfiler:
         class_distribution = None
         class_balance_ratio = None
         n_classes = None
+        task_type = 'regression'  # Default to regression
         if y is not None:
-            unique, counts = np.unique(y, return_counts=True)
-            class_distribution = dict(zip([str(u) for u in unique], [int(c) for c in counts]))
-            n_classes = len(unique)
-            class_balance_ratio = float(min(counts) / max(counts)) if max(counts) > 0 else 0
+            # Determine task type using sklearn's type_of_target
+            target_type = type_of_target(y)
+            if target_type in ['binary', 'multiclass']:
+                task_type = 'classification'
+                unique, counts = np.unique(y, return_counts=True)
+                class_distribution = dict(zip([str(u) for u in unique], [int(c) for c in counts]))
+                n_classes = len(unique)
+                class_balance_ratio = float(min(counts) / max(counts)) if max(counts) > 0 else 0
+            elif target_type in ['continuous', 'continuous-multioutput']:
+                task_type = 'regression'
 
         corr_matrix = None
         if n_features <= 20:
@@ -139,7 +148,8 @@ class DataProfiler:
             class_distribution=class_distribution, class_balance_ratio=class_balance_ratio,
             data_complexity=complexity, feature_correlation_matrix=corr_matrix,
             recommended_models=recommended_models, preprocessing_needs=preprocessing_needs,
-            created_at=datetime.now().isoformat(), dataset_name=self.dataset_name
+            created_at=datetime.now().isoformat(), dataset_name=self.dataset_name,
+            task_type=task_type
         )
         return self.profile
 
