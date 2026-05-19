@@ -1,19 +1,18 @@
-import numpy as np
-import pandas as pd
-import matplotlib
-
-matplotlib.use('Agg')
-import matplotlib.pyplot as plt
-import seaborn as sns
-from scipy import stats
-from typing import Dict, List, Any, Optional
+import logging
 import json
+import warnings
 from dataclasses import dataclass, asdict
 from datetime import datetime
-import warnings
+from typing import Dict, List, Optional
+
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+import numpy as np
+from scipy import stats
 from sklearn.utils.multiclass import type_of_target
 
-warnings.filterwarnings('ignore')
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -51,106 +50,160 @@ class DatasetProfile:
     def to_dict(self) -> Dict:
         return asdict(self)
 
-    def save(self, filepath: str):
-        with open(filepath, 'w', encoding='utf-8') as f:
+    def save(self, filepath: str) -> None:
+        with open(filepath, "w", encoding="utf-8") as f:
             json.dump(self.to_dict(), f, indent=2, default=str)
 
     @classmethod
-    def load(cls, filepath: str) -> 'DatasetProfile':
-        with open(filepath, 'r', encoding='utf-8') as f:
+    def load(cls, filepath: str) -> "DatasetProfile":
+        """Load a saved profile from JSON.
+
+        FIX: correctly restores FeatureProfile dataclass instances
+        instead of leaving feature_profiles as plain dicts, which caused
+        AttributeError on every attribute access.
+        """
+        with open(filepath, "r", encoding="utf-8") as f:
             data = json.load(f)
+        # Restore FeatureProfile objects from nested dicts
+        raw_fps = data.get("feature_profiles", [])
+        data["feature_profiles"] = [
+            FeatureProfile(**fp) if isinstance(fp, dict) else fp for fp in raw_fps
+        ]
         return cls(**data)
 
 
 class DataProfiler:
-    def __init__(self, dataset_name: str = "unknown"):
+    def __init__(self, dataset_name: str = "unknown") -> None:
         self.dataset_name = dataset_name
-        self.profile = None
+        self.profile: Optional[DatasetProfile] = None
 
-    def profile_tabular_data(self, X: np.ndarray, y: Optional[np.ndarray] = None,
-                             feature_names: Optional[List[str]] = None) -> DatasetProfile:
+    def profile_tabular_data(
+        self,
+        X: np.ndarray,
+        y: Optional[np.ndarray] = None,
+        feature_names: Optional[List[str]] = None,
+    ) -> DatasetProfile:
         if not np.issubdtype(X.dtype, np.number):
             raise TypeError("Input array X must be numeric.")
+
         if feature_names is None:
             feature_names = [f"feature_{i}" for i in range(X.shape[1])]
 
         n_samples, n_features = X.shape
         memory_size_mb = X.nbytes / (1024 ** 2)
 
+        # Sample for profiling to keep it fast on large datasets
         X_work, y_work = X, y
-        if n_samples > 10000 and y is not None:
-            idx = np.random.choice(n_samples, 10000, replace=False)
+        if n_samples > 10_000 and y is not None:
+            idx = np.random.choice(n_samples, 10_000, replace=False)
             X_work, y_work = X[idx], y[idx]
 
-        feature_profiles = []
+        feature_profiles: List[FeatureProfile] = []
         for i in range(n_features):
             feature = X_work[:, i]
-            std_val = float(np.std(feature)) if np.std(feature) != 0 else 1e-10
-            mean_val = float(np.mean(feature))
-            try:
-                skewness_val = float(stats.skew(feature))
-            except Exception:
-                skewness_val = 0.0
-            try:
-                kurtosis_val = float(stats.kurtosis(feature))
-            except Exception:
-                kurtosis_val = 0.0
 
-            profile = FeatureProfile(
-                name=feature_names[i], mean=mean_val, std=std_val,
-                min=float(np.min(feature)), max=float(np.max(feature)),
-                median=float(np.median(feature)), skewness=skewness_val,
-                kurtosis=kurtosis_val, missing_values=int(np.sum(np.isnan(feature))),
-                outliers_count=self._count_outliers(feature), correlation_with_target=None
+            # FIX: compute std only once
+            _std = float(np.std(feature))
+            std_val = _std if _std != 0 else 1e-10
+
+            mean_val = float(np.mean(feature))
+
+            # FIX: targeted warning suppression instead of global filterwarnings
+            with warnings.catch_warnings():
+                warnings.filterwarnings("ignore", category=RuntimeWarning)
+                try:
+                    skewness_val = float(stats.skew(feature))
+                except Exception:
+                    skewness_val = 0.0
+                try:
+                    kurtosis_val = float(stats.kurtosis(feature))
+                except Exception:
+                    kurtosis_val = 0.0
+
+            fp = FeatureProfile(
+                name=feature_names[i],
+                mean=mean_val,
+                std=std_val,
+                min=float(np.min(feature)),
+                max=float(np.max(feature)),
+                median=float(np.median(feature)),
+                skewness=skewness_val,
+                kurtosis=kurtosis_val,
+                missing_values=int(np.sum(np.isnan(feature))),
+                outliers_count=self._count_outliers(feature),
+                correlation_with_target=None,
             )
 
             if y_work is not None:
-                try:
-                    corr, _ = stats.pearsonr(feature, y_work)
-                    profile.correlation_with_target = float(corr)
-                except Exception:
-                    profile.correlation_with_target = None
+                with warnings.catch_warnings():
+                    warnings.filterwarnings("ignore", category=RuntimeWarning)
+                    try:
+                        corr, _ = stats.pearsonr(feature, y_work.astype(float))
+                        fp.correlation_with_target = float(corr)
+                    except Exception:
+                        fp.correlation_with_target = None
 
-            feature_profiles.append(profile)
+            feature_profiles.append(fp)
 
+        # Detect task type
         class_distribution = None
         class_balance_ratio = None
         n_classes = None
-        task_type = 'regression'
+        task_type = "regression"
+
         if y is not None:
             target_type = type_of_target(y)
-            if target_type in ['binary', 'multiclass']:
-                task_type = 'classification'
+            if target_type in ("binary", "multiclass"):
+                task_type = "classification"
                 unique, counts = np.unique(y, return_counts=True)
-                class_distribution = dict(zip([str(u) for u in unique], [int(c) for c in counts]))
+                class_distribution = dict(
+                    zip([str(u) for u in unique], [int(c) for c in counts])
+                )
                 n_classes = len(unique)
-                class_balance_ratio = float(min(counts) / max(counts)) if max(counts) > 0 else 0
-            elif target_type in ['continuous', 'continuous-multioutput']:
-                task_type = 'regression'
+                class_balance_ratio = (
+                    float(min(counts) / max(counts)) if max(counts) > 0 else 0.0
+                )
+            else:
+                task_type = "regression"
 
+        # Correlation matrix (only for small feature sets)
         corr_matrix = None
         if n_features <= 20:
             try:
-                corr_matrix = np.corrcoef(X_work.T)
-                corr_matrix = np.nan_to_num(corr_matrix, nan=0.0)
-                corr_matrix = corr_matrix.tolist()
-            except Exception:
-                corr_matrix = None
+                cm = np.corrcoef(X_work.T)
+                corr_matrix = np.nan_to_num(cm, nan=0.0).tolist()
+            except Exception as exc:
+                logger.debug("Could not compute correlation matrix: %s", exc)
 
         complexity = self._assess_complexity(n_samples, n_features)
         recommended_models = self._recommend_models(complexity, class_balance_ratio)
         preprocessing_needs = self._detect_preprocessing_needs(X, feature_profiles)
 
         self.profile = DatasetProfile(
-            n_samples=n_samples, n_features=n_features, n_classes=n_classes,
-            memory_size_mb=memory_size_mb, feature_profiles=feature_profiles,
-            class_distribution=class_distribution, class_balance_ratio=class_balance_ratio,
-            data_complexity=complexity, feature_correlation_matrix=corr_matrix,
-            recommended_models=recommended_models, preprocessing_needs=preprocessing_needs,
-            created_at=datetime.now().isoformat(), dataset_name=self.dataset_name,
-            task_type=task_type
+            n_samples=n_samples,
+            n_features=n_features,
+            n_classes=n_classes,
+            memory_size_mb=memory_size_mb,
+            feature_profiles=feature_profiles,
+            class_distribution=class_distribution,
+            class_balance_ratio=class_balance_ratio,
+            data_complexity=complexity,
+            feature_correlation_matrix=corr_matrix,
+            recommended_models=recommended_models,
+            preprocessing_needs=preprocessing_needs,
+            created_at=datetime.now().isoformat(),
+            dataset_name=self.dataset_name,
+            task_type=task_type,
+        )
+        logger.info(
+            "Profiled '%s': %d samples, %d features, task=%s, complexity=%s",
+            self.dataset_name, n_samples, n_features, task_type, complexity,
         )
         return self.profile
+
+    # ------------------------------------------------------------------
+    # Private helpers
+    # ------------------------------------------------------------------
 
     def _count_outliers(self, feature: np.ndarray) -> int:
         Q1 = np.percentile(feature, 25)
@@ -158,9 +211,9 @@ class DataProfiler:
         IQR = Q3 - Q1
         if IQR == 0:
             return 0
-        lower_bound = Q1 - 1.5 * IQR
-        upper_bound = Q3 + 1.5 * IQR
-        return int(np.sum((feature < lower_bound) | (feature > upper_bound)))
+        lower = Q1 - 1.5 * IQR
+        upper = Q3 + 1.5 * IQR
+        return int(np.sum((feature < lower) | (feature > upper)))
 
     def _assess_complexity(self, n_samples: int, n_features: int) -> str:
         if n_features == 0:
@@ -170,11 +223,12 @@ class DataProfiler:
             return "high"
         elif ratio < 100:
             return "medium"
-        else:
-            return "low"
+        return "low"
 
-    def _recommend_models(self, complexity: str, balance_ratio: Optional[float]) -> List[str]:
-        recommendations = []
+    def _recommend_models(
+        self, complexity: str, balance_ratio: Optional[float]
+    ) -> List[str]:
+        recommendations: List[str] = []
         if complexity == "low":
             recommendations.extend(["RandomForest", "SVM", "LogisticRegression"])
         elif complexity == "medium":
@@ -185,16 +239,14 @@ class DataProfiler:
             recommendations.append("BalancedRandomForest")
         return list(set(recommendations))
 
-    def _detect_preprocessing_needs(self, X: np.ndarray,
-                                    feature_profiles: List[FeatureProfile]) -> List[str]:
-        needs = []
+    def _detect_preprocessing_needs(
+        self, X: np.ndarray, feature_profiles: List[FeatureProfile]
+    ) -> List[str]:
+        needs: List[str] = []
         stds = [fp.std for fp in feature_profiles if fp.std > 1e-9]
-        if len(stds) > 1:
-            if max(stds) / min(stds) > 10:
-                needs.append("feature_scaling")
-
-        skewness_values = [abs(fp.skewness) for fp in feature_profiles]
-        if any(s > 1 for s in skewness_values):
+        if len(stds) > 1 and max(stds) / min(stds) > 10:
+            needs.append("feature_scaling")
+        if any(abs(fp.skewness) > 1 for fp in feature_profiles):
             needs.append("skewness_correction")
         total_outliers = sum(fp.outliers_count for fp in feature_profiles)
         if total_outliers > len(X) * 0.05:
@@ -203,62 +255,81 @@ class DataProfiler:
             needs.append("missing_value_imputation")
         return needs if needs else ["none_required"]
 
-    def visualize_profile(self, save_path: Optional[str] = None):
+    # ------------------------------------------------------------------
+    # Visualisation
+    # ------------------------------------------------------------------
+
+    def visualize_profile(self, save_path: Optional[str] = None) -> None:
         if self.profile is None:
-            raise ValueError("Сначала создайте профиль")
+            raise ValueError("Run profile_tabular_data() first.")
+
         fig, axes = plt.subplots(2, 2, figsize=(14, 10))
-        fig.suptitle(f'Профиль датасета: {self.dataset_name}', fontsize=16, fontweight='bold')
-        axes[0, 0].hist([fp.mean for fp in self.profile.feature_profiles],
-                        bins=20, color='steelblue', alpha=0.7)
-        axes[0, 0].set_title('Распределение средних значений признаков')
-        axes[0, 0].set_xlabel('Среднее')
-        axes[0, 0].set_ylabel('Частота')
+        fig.suptitle(f"Dataset profile: {self.dataset_name}", fontsize=16, fontweight="bold")
+
+        # Feature means histogram
+        axes[0, 0].hist(
+            [fp.mean for fp in self.profile.feature_profiles], bins=20, color="steelblue", alpha=0.7
+        )
+        axes[0, 0].set_title("Feature mean distribution")
+        axes[0, 0].set_xlabel("Mean")
+        axes[0, 0].set_ylabel("Count")
+
+        # Correlation matrix
         if self.profile.feature_correlation_matrix:
-            corr_matrix = np.array(self.profile.feature_correlation_matrix)
-            im = axes[0, 1].imshow(corr_matrix, cmap='coolwarm', aspect='auto', vmin=-1, vmax=1)
-            axes[0, 1].set_title('Корреляционная матрица')
+            cm = np.array(self.profile.feature_correlation_matrix)
+            im = axes[0, 1].imshow(cm, cmap="coolwarm", aspect="auto", vmin=-1, vmax=1)
+            axes[0, 1].set_title("Correlation matrix")
             plt.colorbar(im, ax=axes[0, 1])
         else:
-            axes[0, 1].text(0.5, 0.5, 'Слишком много признаков', ha='center', va='center')
-            axes[0, 1].set_title('Корреляционная матрица')
+            axes[0, 1].text(0.5, 0.5, "Too many features (>20)", ha="center", va="center")
+            axes[0, 1].set_title("Correlation matrix")
+
+        # Class distribution
         if self.profile.class_distribution:
             classes = list(self.profile.class_distribution.keys())
             counts = list(self.profile.class_distribution.values())
-            axes[1, 0].bar(classes, counts, color='coral', alpha=0.7)
-            axes[1, 0].set_title('Распределение классов')
-            axes[1, 0].set_xlabel('Класс')
-            axes[1, 0].set_ylabel('Количество')
+            axes[1, 0].bar(classes, counts, color="coral", alpha=0.7)
+            axes[1, 0].set_title("Class distribution")
+            axes[1, 0].set_xlabel("Class")
+            axes[1, 0].set_ylabel("Count")
         else:
-            axes[1, 0].text(0.5, 0.5, 'Нет целевой переменной', ha='center', va='center')
-            axes[1, 0].set_title('Распределение классов')
-        outlier_counts = [fp.outliers_count for fp in self.profile.feature_profiles]
-        feature_names = [fp.name for fp in self.profile.feature_profiles]
-        axes[1, 1].barh(feature_names[:10], outlier_counts[:10], color='green', alpha=0.7)
-        axes[1, 1].set_title('Количество выбросов (первые 10 признаков)')
-        axes[1, 1].set_xlabel('Выбросов')
+            axes[1, 0].text(0.5, 0.5, "Regression task — no class distribution", ha="center", va="center")
+            axes[1, 0].set_title("Class distribution")
+
+        # Outlier counts
+        outlier_counts = [fp.outliers_count for fp in self.profile.feature_profiles[:10]]
+        feature_names = [fp.name for fp in self.profile.feature_profiles[:10]]
+        axes[1, 1].barh(feature_names, outlier_counts, color="green", alpha=0.7)
+        axes[1, 1].set_title("Outliers (first 10 features)")
+        axes[1, 1].set_xlabel("Count")
+
         plt.tight_layout()
         if save_path:
-            plt.savefig(save_path, dpi=300, bbox_inches='tight')
-        plt.close('all')
+            fig.savefig(save_path, dpi=300, bbox_inches="tight")
+            logger.info("Profile visualisation saved: %s", save_path)
+        plt.close(fig)  # FIX: close specific figure, not plt.close('all')
 
-    def print_summary(self):
+    def print_summary(self) -> None:
         if self.profile is None:
-            raise ValueError("Сначала создайте профиль")
-        print("\nПрофиль датасета: ")
-        print(f"  Образцов: {self.profile.n_samples:,} ")
-        print(f"  Признаков: {self.profile.n_features} ")
-        if self.profile.n_classes:
-            print(f"  Классов: {self.profile.n_classes} ")
-        print(f"  Размер: {self.profile.memory_size_mb:.2f} MB ")
+            raise ValueError("Run profile_tabular_data() first.")
+        lines = [
+            "",
+            f"Dataset: {self.dataset_name}",
+            f"  Samples  : {self.profile.n_samples:,}",
+            f"  Features : {self.profile.n_features}",
+            f"  Task     : {self.profile.task_type}",
+            f"  Size     : {self.profile.memory_size_mb:.2f} MB",
+        ]
         if self.profile.class_distribution:
-            print("\nРаспределение классов: ")
+            lines.append("  Class distribution:")
             for cls, count in self.profile.class_distribution.items():
                 pct = count / self.profile.n_samples * 100
-                print(f"  Класс {cls}: {count} ({pct:.1f}%) ")
-        print(f"\nСложность: {self.profile.data_complexity.upper()} ")
-        print("\nРекомендуемые модели: ")
-        for model in self.profile.recommended_models:
-            print(f"  - {model} ")
-        print("\nПредобработка: ")
-        for need in self.profile.preprocessing_needs:
-            print(f"  - {need.replace('_', ' ').title()} ")
+                lines.append(f"    Class {cls}: {count} ({pct:.1f}%)")
+        lines.append(f"  Complexity : {self.profile.data_complexity.upper()}")
+        lines.append("  Recommended models:")
+        for m in self.profile.recommended_models:
+            lines.append(f"    - {m}")
+        lines.append("  Preprocessing needs:")
+        for n in self.profile.preprocessing_needs:
+            lines.append(f"    - {n.replace('_', ' ').title()}")
+        print("\n".join(lines))
