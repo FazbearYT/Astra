@@ -1,6 +1,11 @@
 """
 Astra ML System — Streamlit web application.
 
+UI
+--
+Dark-themed, sidebar-driven, 4-step wizard
+(Data -> Pipeline -> Training -> Results).
+
 Security hardening applied
 --------------------------
 * Path traversal (CWE-22): uploaded filenames are sanitised before being used
@@ -19,6 +24,7 @@ from __future__ import annotations
 import io
 import json
 import logging
+import os
 import re
 import sys
 import traceback
@@ -69,14 +75,219 @@ logger = logging.getLogger(__name__)
 DATA_DIR = Path("data/tabular")
 OUTPUTS_DIR = Path("outputs")
 MAX_ROWS = 500_000          # hard limit for uploaded datasets
+MAX_COLS = 1_000            # CWE-400: reject wide CSVs (CSV-bomb mitigation)
 MAX_UPLOAD_MB = 50          # soft limit (also enforced in config.toml)
 
+# CWE-209: full tracebacks leak file paths and internals. Only show them when
+# ASTRA_DEBUG=1 is set in the environment.
+DEBUG_MODE = os.environ.get("ASTRA_DEBUG", "0").lower() in ("1", "true", "yes")
+
+# Trusted root for the artefacts browser. Anything resolved outside this is
+# rejected (CWE-22: symlinks inside outputs/ could otherwise leak files).
+_OUTPUTS_ROOT = OUTPUTS_DIR.resolve()
+
 st.set_page_config(
-    page_title="Astra ML System",
-    page_icon="🌸",
+    page_title="Astra ML",
+    page_icon="A",
     layout="wide",
-    initial_sidebar_state="collapsed",
+    initial_sidebar_state="expanded",
 )
+
+
+# ---------------------------------------------------------------------------
+# UI theme — custom CSS + horizontal stepper
+# ---------------------------------------------------------------------------
+
+_STEP_LABELS = ("Data", "Pipeline", "Training", "Results")
+
+_CUSTOM_CSS = """
+<style>
+:root {
+    --astra-bg: #0E1117;
+    --astra-surface: #161B26;
+    --astra-surface-2: #1F2533;
+    --astra-border: #2A3142;
+    --astra-text: #E6E8EE;
+    --astra-muted: #8A93A6;
+    --astra-accent: #7C5CFF;
+    --astra-accent-dim: #5C45B8;
+    --astra-success: #4ADE80;
+    --astra-danger: #F87171;
+}
+
+.block-container { padding-top: 1.5rem; max-width: 1180px; }
+h1, h2, h3, h4 { letter-spacing: -0.01em; }
+
+/* Buttons */
+.stButton > button, .stDownloadButton > button {
+    background: var(--astra-surface);
+    color: var(--astra-text);
+    border: 1px solid var(--astra-border);
+    border-radius: 10px;
+    padding: 0.5rem 1rem;
+    font-weight: 500;
+    transition: background 0.15s, border-color 0.15s, transform 0.05s;
+}
+.stButton > button:hover, .stDownloadButton > button:hover {
+    border-color: var(--astra-accent);
+    background: var(--astra-surface-2);
+}
+.stButton > button:active { transform: translateY(1px); }
+.stButton > button[kind="primary"] {
+    background: var(--astra-accent);
+    border-color: var(--astra-accent);
+    color: #fff;
+}
+.stButton > button[kind="primary"]:hover {
+    background: var(--astra-accent-dim);
+    border-color: var(--astra-accent-dim);
+}
+
+/* Inputs */
+.stTextInput input, .stNumberInput input, .stSelectbox div[data-baseweb="select"] > div,
+.stTextArea textarea {
+    background: var(--astra-surface) !important;
+    border: 1px solid var(--astra-border) !important;
+    color: var(--astra-text) !important;
+    border-radius: 8px !important;
+}
+
+/* Expanders + tabs + metrics */
+div[data-testid="stExpander"] {
+    background: var(--astra-surface);
+    border: 1px solid var(--astra-border);
+    border-radius: 12px;
+    overflow: hidden;
+}
+div[data-testid="stMetric"] {
+    background: var(--astra-surface);
+    border: 1px solid var(--astra-border);
+    border-radius: 12px;
+    padding: 14px 16px;
+}
+
+/* DataFrames */
+div[data-testid="stDataFrame"] {
+    border: 1px solid var(--astra-border);
+    border-radius: 12px;
+    overflow: hidden;
+}
+
+/* Alerts */
+div[data-testid="stAlert"] { border-radius: 10px; }
+
+/* Sidebar */
+section[data-testid="stSidebar"] {
+    background: #0B0E14;
+    border-right: 1px solid var(--astra-border);
+}
+section[data-testid="stSidebar"] .stRadio label { color: var(--astra-text); }
+
+/* Brand header */
+.astra-brand {
+    display: flex; align-items: center; gap: 14px;
+    padding: 4px 0 18px 0;
+}
+.astra-logo {
+    width: 38px; height: 38px; border-radius: 10px;
+    background: linear-gradient(135deg, #7C5CFF 0%, #38BDF8 100%);
+    display: flex; align-items: center; justify-content: center;
+    color: #0E1117; font-weight: 700; font-size: 18px;
+}
+.astra-title { font-size: 24px; font-weight: 600; margin: 0; }
+.astra-sub  { color: var(--astra-muted); font-size: 13px; margin: 2px 0 0 0; }
+
+/* Stepper */
+.astra-stepper {
+    display: flex; justify-content: space-between;
+    background: var(--astra-surface);
+    border: 1px solid var(--astra-border);
+    border-radius: 14px;
+    padding: 14px 22px;
+    margin: 6px 0 22px 0;
+}
+.astra-step { display: flex; align-items: center; gap: 10px; flex: 1; }
+.astra-step + .astra-step::before {
+    content: ""; flex: 0 0 28px; height: 2px;
+    background: var(--astra-border); margin-right: 10px;
+}
+.astra-step.done + .astra-step::before { background: var(--astra-accent); }
+.astra-bullet {
+    width: 26px; height: 26px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 12px; font-weight: 600;
+    background: var(--astra-surface-2);
+    color: var(--astra-muted);
+    border: 1px solid var(--astra-border);
+}
+.astra-step.done .astra-bullet {
+    background: var(--astra-accent); color: #fff; border-color: var(--astra-accent);
+}
+.astra-step.active .astra-bullet {
+    background: #0E1117; color: var(--astra-accent); border-color: var(--astra-accent);
+    box-shadow: 0 0 0 4px rgba(124, 92, 255, 0.15);
+}
+.astra-step-label { color: var(--astra-muted); font-size: 13px; font-weight: 500; }
+.astra-step.active .astra-step-label { color: var(--astra-text); }
+.astra-step.done   .astra-step-label { color: var(--astra-text); }
+
+/* Section header */
+.astra-section {
+    display: flex; align-items: baseline; justify-content: space-between;
+    margin: 6px 0 14px 0;
+}
+.astra-section h2 { margin: 0; font-size: 22px; font-weight: 600; }
+.astra-section .hint { color: var(--astra-muted); font-size: 13px; }
+</style>
+"""
+
+
+def inject_styles() -> None:
+    st.markdown(_CUSTOM_CSS, unsafe_allow_html=True)
+
+
+def render_brand() -> None:
+    st.markdown(
+        """
+        <div class="astra-brand">
+            <div class="astra-logo">A</div>
+            <div>
+                <div class="astra-title">Astra ML</div>
+                <div class="astra-sub">Automatic model selection based on dataset profiling</div>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_stepper(current: int) -> None:
+    """Render a horizontal 4-step indicator. ``current`` is 0-indexed."""
+    parts = []
+    for i, label in enumerate(_STEP_LABELS):
+        cls = "astra-step"
+        if i < current:
+            cls += " done"
+        elif i == current:
+            cls += " active"
+        parts.append(
+            f'<div class="{cls}">'
+            f'  <div class="astra-bullet">{i + 1}</div>'
+            f'  <div class="astra-step-label">{label}</div>'
+            f"</div>"
+        )
+    st.markdown(
+        f'<div class="astra-stepper">{"".join(parts)}</div>',
+        unsafe_allow_html=True,
+    )
+
+
+def render_section_header(title: str, hint: str = "") -> None:
+    st.markdown(
+        f'<div class="astra-section"><h2>{title}</h2>'
+        f'<span class="hint">{hint}</span></div>',
+        unsafe_allow_html=True,
+    )
 
 # ---------------------------------------------------------------------------
 # Session state helpers
@@ -208,10 +419,15 @@ def auto_format_dataframe(df: pd.DataFrame) -> pd.DataFrame:
 
     # FIX: use errors='coerce' so mixed columns convert properly;
     # only apply conversion when at least 90 % of values parse successfully.
+    # Log conversions so the user knows what was silently changed.
+    converted_cols: list[str] = []
     for col in df_clean.select_dtypes(include="object").columns:
         converted = pd.to_numeric(df_clean[col], errors="coerce")
         if converted.notna().mean() >= 0.90:
             df_clean[col] = converted
+            converted_cols.append(col)
+    if converted_cols:
+        logger.info("Auto-converted object → numeric: %s", converted_cols)
 
     # Normalise common null representations
     df_clean.replace(["", " ", "NA", "N/A", "null", "NULL", "None", "nan", "NaN"], np.nan, inplace=True)
@@ -256,12 +472,23 @@ def format_and_save_csv(uploaded_file, save_path: Path) -> tuple[bool, str]:
         if df is None or len(df.columns) <= 1:
             return False, "Could not parse CSV. Please verify the file format."
 
+        # CWE-400: reject pathologically wide CSVs before pandas materialises
+        # the full DataFrame. We already know column count from the sniff above.
+        if len(df.columns) > MAX_COLS:
+            return False, (
+                f"CSV has {len(df.columns):,} columns. Maximum allowed: {MAX_COLS:,}."
+            )
+
         uploaded_file.seek(0)
         df_full = pd.read_csv(uploaded_file, encoding=encoding, sep=sep_used)
 
         if len(df_full) > MAX_ROWS:
             return False, (
                 f"Dataset has {len(df_full):,} rows. Maximum allowed: {MAX_ROWS:,}."
+            )
+        if len(df_full.columns) > MAX_COLS:
+            return False, (
+                f"CSV has {len(df_full.columns):,} columns. Maximum allowed: {MAX_COLS:,}."
             )
 
         df_fmt = auto_format_dataframe(df_full)
@@ -415,6 +642,23 @@ def save_results_to_session(
     save_visualizations(output_dir, profile, best_model, X_test, y_test)
 
 
+def _is_inside_outputs(path: Path) -> bool:
+    """CWE-22 guard: ensure *path* resolves inside the trusted outputs root.
+
+    Rejects symlinks that escape OUTPUTS_DIR (e.g. ``outputs/run_001/leak ->
+    /etc/passwd``).  Returns False on any resolution error.
+    """
+    try:
+        resolved = path.resolve(strict=True)
+    except (OSError, RuntimeError):
+        return False
+    try:
+        resolved.relative_to(_OUTPUTS_ROOT)
+    except ValueError:
+        return False
+    return True
+
+
 def render_artifacts_browser() -> None:
     st.divider()
     st.subheader("📦 Artifacts & Outputs")
@@ -428,9 +672,18 @@ def render_artifacts_browser() -> None:
         return
 
     run_path = run_dirs[-1]
+    if not _is_inside_outputs(run_path):
+        st.error("Refusing to browse run directory outside the outputs root.")
+        return
+
     st.info(f"Showing artifacts from **{run_path.name}**")
 
-    files = sorted(f for f in run_path.rglob("*") if f.is_file())
+    # CWE-22: filter out anything (file or symlink target) that resolves
+    # outside the trusted outputs root.
+    files = sorted(
+        f for f in run_path.rglob("*")
+        if f.is_file() and _is_inside_outputs(f)
+    )
     if not files:
         st.warning("No files in this directory.")
         return
@@ -502,88 +755,94 @@ def render_comparison_chart(history: list, task_type: str = "classification") ->
 # ---------------------------------------------------------------------------
 
 def step_dataset() -> None:
-    st.header("Step 1: Select Data")
-    st.progress(0.25)
+    render_section_header(
+        "Select a dataset",
+        "Pick an existing CSV, upload your own, or generate a built-in sample.",
+    )
 
-    st.subheader("Available Datasets")
     datasets = get_available_datasets()
     if datasets:
+        st.caption(f"{len(datasets)} dataset(s) available")
         cols = st.columns(min(3, len(datasets)))
         for idx, ds in enumerate(datasets):
             with cols[idx % len(cols)]:
                 st.button(
-                    f"📊 {ds['name']}\n({ds['cols']} columns)",
+                    f"{ds['name']}\n{ds['cols']} columns",
                     key=f"load_{ds['name']}",
                     on_click=set_data_and_advance,
                     args=(ds["path"],),
                     use_container_width=True,
                 )
     else:
-        st.info("No datasets found in `data/tabular`. Upload a CSV or create a test dataset.")
+        st.info("No datasets found in `data/tabular`. Upload a CSV or create a sample below.")
 
     st.divider()
-    col_upload, col_create = st.columns(2)
+
+    tab_upload, tab_create = st.tabs(["Upload CSV", "Generate sample"])
 
     # --- Upload ---
-    with col_upload:
-        with st.expander("📤 Upload CSV (Auto-Format Enabled)", expanded=False):
+    with tab_upload:
+        st.markdown(
+            "Drop a CSV file. The first row is treated as headers; encoding, "
+            "separator and column names are normalised automatically."
+        )
+        with st.expander("CSV requirements & auto-formatting", expanded=False):
             st.markdown(
-                """
-**CSV requirements**
-- First row = column headers
-- At least one target column
-- Minimum 10 rows
-
-**Auto-formatting**
-- Encoding detection (UTF-8, Windows-1251, Latin-1…)
-- Separator detection (`,` `;` `\\t` `|`)
-- Column name sanitisation
-- Empty row/column removal
-- Numeric string conversion
-- Common null normalisation
-                """
+                "**Requirements**  \n"
+                "- First row contains column headers  \n"
+                "- At least one target column  \n"
+                "- Minimum 10 rows  \n\n"
+                "**Auto-formatting applied**  \n"
+                "- Encoding detection (UTF-8, Windows-1251, Latin-1, …)  \n"
+                "- Separator detection (`,` `;` `\\t` `|`)  \n"
+                "- Column-name sanitisation  \n"
+                "- Empty row/column removal  \n"
+                "- Numeric string conversion (logged)  \n"
+                "- Common null-value normalisation"
             )
-            uploaded = st.file_uploader("Select CSV", type=["csv"], key="upload_csv")
-            if uploaded is not None:
-                # FIX (CWE-22): sanitise filename before writing to disk
-                safe_name = _sanitize_filename(uploaded.name)
-                save_path = DATA_DIR / safe_name
+        uploaded = st.file_uploader("CSV file", type=["csv"], key="upload_csv")
+        if uploaded is not None:
+            safe_name = _sanitize_filename(uploaded.name)
+            save_path = DATA_DIR / safe_name
+            if save_path.exists():
+                stem = save_path.stem
+                save_path = DATA_DIR / f"{stem}_{datetime.now().strftime('%H%M%S')}.csv"
 
-                # Prevent duplicate names from colliding
-                if save_path.exists():
-                    stem = save_path.stem
-                    save_path = DATA_DIR / f"{stem}_{datetime.now().strftime('%H%M%S')}.csv"
-
-                with st.spinner("🔄 Auto-formatting…"):
-                    success, message = format_and_save_csv(uploaded, save_path)
-                if success:
-                    st.success(f"✅ {message}")
-                    st.cache_data.clear()  # invalidate dataset list cache
-                    try:
-                        st.dataframe(pd.read_csv(save_path, nrows=10), use_container_width=True)
-                        set_data_and_advance(save_path)
-                        st.rerun()
-                    except Exception as exc:
-                        st.error(f"Error reading formatted file: {exc}")
-                else:
-                    st.error(f"❌ {message}")
+            with st.spinner("Auto-formatting…"):
+                success, message = format_and_save_csv(uploaded, save_path)
+            if success:
+                st.success(message)
+                st.cache_data.clear()
+                try:
+                    st.dataframe(pd.read_csv(save_path, nrows=10), use_container_width=True)
+                    set_data_and_advance(save_path)
+                    st.rerun()
+                except Exception as exc:
+                    st.error(f"Could not read formatted file: {exc}")
+            else:
+                st.error(message)
 
     # --- Create test datasets ---
-    with col_create:
-        with st.expander("🧪 Create Test Dataset", expanded=False):
-            st.markdown("Generate built-in datasets for quick testing.")
-            gen = DataGenerator(data_dir=Path("data"))
-            creators = {
-                "Iris":      gen.create_iris_dataset,
-                "Wine":      gen.create_wine_dataset,
-                "Digits":    gen.create_digits_dataset,
-                "Titanic":   gen.create_titanic_dataset,
-                "Synthetic": gen.create_synthetic_dataset,
-                "Large":     gen.create_large_dataset,
-            }
-            for ds_name, creator in creators.items():
-                if st.button(f"Create '{ds_name}'", key=f"create_{ds_name}", use_container_width=True):
-                    with st.spinner(f"Creating '{ds_name}'…"):
+    with tab_create:
+        st.markdown("Generate a built-in dataset for quick experimentation.")
+        gen = DataGenerator(data_dir=Path("data"))
+        creators = {
+            "Iris":      ("150 rows, 3 classes",       gen.create_iris_dataset),
+            "Wine":      ("178 rows, 3 classes",       gen.create_wine_dataset),
+            "Digits":    ("1,797 rows, 10 classes",    gen.create_digits_dataset),
+            "Titanic":   ("891 rows, binary target",   gen.create_titanic_dataset),
+            "Synthetic": ("500 rows, 3 clusters",      gen.create_synthetic_dataset),
+            "Large":     ("100,000 rows, 5 classes",   gen.create_large_dataset),
+        }
+        cols = st.columns(3)
+        for i, (ds_name, (descr, creator)) in enumerate(creators.items()):
+            with cols[i % 3]:
+                if st.button(
+                    f"{ds_name}\n{descr}",
+                    key=f"create_{ds_name}",
+                    use_container_width=True,
+                ):
+                    with st.spinner(f"Generating {ds_name}…"):
                         try:
                             path = creator()
                             st.cache_data.clear()
@@ -598,32 +857,33 @@ def step_dataset() -> None:
 # ---------------------------------------------------------------------------
 
 def step_pipeline() -> None:
-    st.header("Step 2: Pipeline Configuration")
-    st.progress(0.5)
+    render_section_header(
+        "Configure the pipeline",
+        "Pick a preset or fine-tune every model and weight.",
+    )
 
     if st.session_state.data_preview is None:
-        st.warning("Please select data in Step 1 first.")
-        if st.button("← Back to data selection"):
+        st.warning("Select a dataset first.")
+        if st.button("Back to data selection"):
             st.session_state.step = 0
             st.rerun()
         return
 
-    st.success(f"Dataset: `{st.session_state.data_path.name}`")
-    st.dataframe(st.session_state.data_preview, use_container_width=True)
+    st.caption(f"Dataset: {st.session_state.data_path.name}")
+    with st.expander("Preview (first 100 rows)", expanded=False):
+        st.dataframe(st.session_state.data_preview, use_container_width=True)
 
-    # FIX: user explicitly selects the target column
     cols = list(st.session_state.data_preview.columns)
-    # Guess a sensible default: last column, or first matching common name
     _candidates = ["target", "class", "label", "category", "target_name"]
     default_idx = next(
         (cols.index(c) for c in _candidates if c in cols),
         len(cols) - 1,
     )
     target_col = st.selectbox(
-        "🎯 Target column",
+        "Target column",
         options=cols,
         index=default_idx,
-        help="Select the column the model should learn to predict.",
+        help="Column the model should learn to predict.",
     )
     st.session_state.target_column = target_col
 
@@ -633,28 +893,41 @@ def step_pipeline() -> None:
         load_preset_config("Standard")
 
     preset_mode = st.radio(
-        "Configuration mode:",
-        ["Fast", "Standard", "Accurate", "Advanced Customization"],
+        "Mode",
+        ["Fast", "Standard", "Accurate", "Advanced"],
         index=1,
+        horizontal=True,
         key="preset_mode_radio",
+        captions=[
+            "Two models, quick scan",
+            "Five models, balanced",
+            "Five models with CV",
+            "Manual fine-tuning",
+        ],
     )
 
-    if preset_mode != "Advanced Customization":
-        if st.session_state.get("last_preset") != preset_mode or st.session_state.config_state is None:
+    if preset_mode != "Advanced":
+        if (
+            st.session_state.get("last_preset") != preset_mode
+            or st.session_state.config_state is None
+        ):
             load_preset_config(preset_mode)
             st.session_state.last_preset = preset_mode
 
-        st.info(f"Using **{preset_mode}** preset.")
         cfg = st.session_state.config_state
-        st.json({
-            "models_enabled": sum(1 for m in cfg["models"].values() if m["enabled"]),
-            "cv_folds": cfg["training"].get("cv_folds", 5),
-            "test_size": cfg["training"].get("test_size", 0.2),
-            "scoring_weights": cfg["scoring"],
-        })
+        enabled = sum(1 for m in cfg["models"].values() if m["enabled"])
+
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("Models", enabled)
+        m2.metric("CV folds", cfg["training"].get("cv_folds", 5))
+        m3.metric("Test size", f"{cfg['training'].get('test_size', 0.2):.0%}")
+        m4.metric(
+            "Scoring",
+            f"acc {cfg['scoring']['accuracy_weight']:.2f} / "
+            f"f1 {cfg['scoring']['f1_weight']:.2f}",
+        )
     else:
-        st.subheader("Advanced Pipeline Configuration")
-        st.warning("Fine-tune all parameters manually.")
+        st.caption("Manually tune training, scoring and per-model parameters.")
 
         if not st.session_state.get("config_initialized"):
             load_preset_config("Accurate")
@@ -662,78 +935,108 @@ def step_pipeline() -> None:
 
         with st.form("advanced_config_form"):
             cfg_s = st.session_state.config_state
-            cv_folds = st.number_input(
-                "CV Folds", value=cfg_s["training"].get("cv_folds", 5), min_value=2, max_value=20
-            )
-            test_size = st.slider(
-                "Test Size", 0.1, 0.4, value=cfg_s["training"].get("test_size", 0.2), step=0.05
-            )
-            use_cv = st.checkbox(
-                "Use CV in Final Scoring", value=cfg_s["training"].get("use_cv_in_scoring", False)
-            )
 
+            st.markdown("##### Training")
+            tcol1, tcol2, tcol3 = st.columns(3)
+            with tcol1:
+                cv_folds = st.number_input(
+                    "CV folds",
+                    value=cfg_s["training"].get("cv_folds", 5),
+                    min_value=2, max_value=20,
+                )
+            with tcol2:
+                test_size = st.slider(
+                    "Test size", 0.1, 0.4,
+                    value=cfg_s["training"].get("test_size", 0.2), step=0.05,
+                )
+            with tcol3:
+                use_cv = st.checkbox(
+                    "Include CV in final score",
+                    value=cfg_s["training"].get("use_cv_in_scoring", False),
+                )
+
+            st.markdown("##### Global scoring weights")
             c1, c2, c3 = st.columns(3)
             with c1:
-                aw = st.slider("Global Accuracy Weight", 0.0, 1.0,
+                aw = st.slider("Accuracy", 0.0, 1.0,
                                value=cfg_s["scoring"].get("accuracy_weight", 0.7), step=0.05)
             with c2:
-                fw = st.slider("Global F1 Weight", 0.0, 1.0,
+                fw = st.slider("F1", 0.0, 1.0,
                                value=cfg_s["scoring"].get("f1_weight", 0.3), step=0.05)
             with c3:
-                cw = st.slider("Global CV Weight", 0.0, 1.0,
+                cw = st.slider("CV", 0.0, 1.0,
                                value=cfg_s["scoring"].get("cv_weight", 0.0), step=0.05)
 
-            st.divider()
-            st.markdown("### Model-specific configuration")
+            st.markdown("##### Per-model configuration")
 
             model_updates: dict = {}
             for model_key, model_data in cfg_s["models"].items():
-                with st.expander(f"🔧 {model_data['name']}", expanded=False):
+                with st.expander(model_data["name"], expanded=False):
                     col_en, col_desc = st.columns([1, 3])
                     with col_en:
-                        enabled = st.checkbox("Enabled", value=model_data.get("enabled", True),
-                                              key=f"en_{model_key}")
+                        enabled = st.checkbox(
+                            "Enabled",
+                            value=model_data.get("enabled", True),
+                            key=f"en_{model_key}",
+                        )
                     with col_desc:
-                        st.markdown(f"*{model_data.get('description', '')}*")
+                        st.caption(model_data.get("description", ""))
 
                     st.markdown("**Hyperparameters (JSON)**")
                     params_json = json.dumps(model_data.get("params", {}), indent=2)
                     raw_params_str = st.text_area(
-                        "Params", value=params_json, height=100, key=f"p_{model_key}"
+                        "Params", value=params_json, height=120, key=f"p_{model_key}",
+                        label_visibility="collapsed",
                     )
 
-                    # FIX: specific exception, show clear error
                     try:
                         parsed_params = json.loads(raw_params_str)
                     except json.JSONDecodeError as exc:
                         st.error(f"Invalid JSON: {exc}")
                         parsed_params = model_data.get("params", {})
 
-                    st.markdown("**Custom Scoring Weights** *(overrides global)*")
+                    st.markdown("**Custom scoring weights** (override global)")
                     wc1, wc2, wc3 = st.columns(3)
                     existing_w = model_data.get("custom_scoring_weights", {})
                     with wc1:
-                        m_aw = st.slider("Acc", 0.0, 1.0,
-                                         value=existing_w.get("accuracy_weight", cfg_s["scoring"]["accuracy_weight"]),
-                                         step=0.05, key=f"aw_{model_key}")
+                        m_aw = st.slider(
+                            "Accuracy", 0.0, 1.0,
+                            value=existing_w.get(
+                                "accuracy_weight", cfg_s["scoring"]["accuracy_weight"]
+                            ),
+                            step=0.05, key=f"aw_{model_key}",
+                        )
                     with wc2:
-                        m_fw = st.slider("F1", 0.0, 1.0,
-                                         value=existing_w.get("f1_weight", cfg_s["scoring"]["f1_weight"]),
-                                         step=0.05, key=f"fw_{model_key}")
+                        m_fw = st.slider(
+                            "F1", 0.0, 1.0,
+                            value=existing_w.get(
+                                "f1_weight", cfg_s["scoring"]["f1_weight"]
+                            ),
+                            step=0.05, key=f"fw_{model_key}",
+                        )
                     with wc3:
-                        m_cw = st.slider("CV", 0.0, 1.0,
-                                         value=existing_w.get("cv_weight", cfg_s["scoring"]["cv_weight"]),
-                                         step=0.05, key=f"cw_{model_key}")
+                        m_cw = st.slider(
+                            "CV", 0.0, 1.0,
+                            value=existing_w.get(
+                                "cv_weight", cfg_s["scoring"]["cv_weight"]
+                            ),
+                            step=0.05, key=f"cw_{model_key}",
+                        )
 
                     model_updates[model_key] = {
                         "enabled": enabled,
                         "params": parsed_params,
-                        "custom_scoring_weights": {"accuracy_weight": m_aw, "f1_weight": m_fw, "cv_weight": m_cw},
+                        "custom_scoring_weights": {
+                            "accuracy_weight": m_aw,
+                            "f1_weight": m_fw,
+                            "cv_weight": m_cw,
+                        },
                     }
 
-            submitted = st.form_submit_button("Apply Advanced Configuration", type="primary")
+            submitted = st.form_submit_button(
+                "Apply configuration", type="primary", use_container_width=True
+            )
             if submitted:
-                # Apply updates
                 cfg_s["training"]["cv_folds"] = cv_folds
                 cfg_s["training"]["test_size"] = test_size
                 cfg_s["training"]["use_cv_in_scoring"] = use_cv
@@ -742,15 +1045,16 @@ def step_pipeline() -> None:
                 cfg_s["scoring"]["cv_weight"] = cw
                 for mk, upd in model_updates.items():
                     cfg_s["models"][mk].update(upd)
-                st.success("Advanced configuration applied!")
+                st.success("Advanced configuration applied.")
 
-    col_back, col_run = st.columns(2)
+    st.divider()
+    col_back, col_run = st.columns([1, 2])
     with col_back:
-        if st.button("← Back"):
+        if st.button("Back", use_container_width=True):
             st.session_state.step = 0
             st.rerun()
     with col_run:
-        if st.button("Save & Start Training", type="primary"):
+        if st.button("Start training", type="primary", use_container_width=True):
             try:
                 config_obj = build_config_from_state()
                 st.session_state.pipeline_config = config_obj
@@ -765,18 +1069,21 @@ def step_pipeline() -> None:
 # ---------------------------------------------------------------------------
 
 def step_training() -> None:
-    st.header("Step 3: Model Training")
+    render_section_header(
+        "Train models",
+        "Each enabled model is fitted on the train split and scored on the holdout.",
+    )
 
     if st.session_state.data_path is None or st.session_state.pipeline_config is None:
-        st.warning("Missing data or configuration. Please go back.")
-        if st.button("← Back to configuration"):
+        st.warning("Missing data or configuration.")
+        if st.button("Back to configuration"):
             st.session_state.step = 1
             st.rerun()
         return
 
     if st.session_state.training_complete:
-        st.success("Training completed.")
-        if st.button("View Results →", type="primary"):
+        st.success("Training complete.")
+        if st.button("View results", type="primary"):
             st.session_state.step = 3
             st.rerun()
         return
@@ -832,13 +1139,15 @@ def step_training() -> None:
         progress_bar.progress(40)
         selector = AdaptiveModelSelector()
         selector.register_models_from_pipeline_config(config, task_type=task_type)
-        total_models = len(selector.models)
 
-        # 5. Train & select — dynamic progress
-        for i in range(total_models):
-            pct = 40 + int(50 * (i / total_models))
-            status_text.text(f"Training model {i + 1} / {total_models}…")
-            progress_bar.progress(pct)
+        # 5. Train & select — real per-model progress via callback.
+        # FIX: previously this loop only animated the bar without doing any
+        # work, then training ran in one blocking call. Now the bar advances
+        # as each model finishes.
+        def _on_model(idx: int, total: int, name: str) -> None:
+            pct = 40 + int(50 * (idx - 1) / max(total, 1))
+            status_text.text(f"Training {name} ({idx}/{total})…")
+            progress_bar.progress(min(pct, 90))
 
         best_model, X_test, y_test = selector.profile_and_select(
             X, y,
@@ -850,6 +1159,7 @@ def step_training() -> None:
             global_accuracy_weight=config.scoring.get("accuracy_weight", 0.7),
             global_f1_weight=config.scoring.get("f1_weight", 0.3),
             global_cv_weight=config.scoring.get("cv_weight", 0.0),
+            progress_cb=_on_model,
         )
 
         st.session_state.best_model = best_model
@@ -900,12 +1210,15 @@ def step_training() -> None:
 # ---------------------------------------------------------------------------
 
 def step_results() -> None:
-    st.header("Step 4: Results")
-    st.progress(1.0)
+    render_section_header(
+        "Results",
+        f"Session {st.session_state.session_id:03d}"
+        if st.session_state.session_id else "",
+    )
 
     if not st.session_state.training_complete or st.session_state.results is None:
         st.warning("No results available.")
-        if st.button("← Back to training"):
+        if st.button("Back to training"):
             st.session_state.step = 2
             st.rerun()
         return
@@ -913,30 +1226,46 @@ def step_results() -> None:
     res = st.session_state.results
     task_type: str = res.get("task_type", "classification")
 
-    if st.session_state.session_id:
-        st.info(f"✅ Session **{st.session_state.session_id:03d}** completed!")
-
     # --- Key metrics ---
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("Best model", res["best_model"].replace("_Specialist", ""))
     if task_type == "classification":
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            st.metric("🏆 Best Model", res["best_model"].replace("_Specialist", ""))
         with col2:
-            st.metric("🎯 Accuracy", f"{res.get('accuracy', 0):.4f}")
+            st.metric("Accuracy", f"{res.get('accuracy', 0):.4f}")
         with col3:
-            st.metric("📊 F1-Score", f"{res.get('f1', 0):.4f}")
+            st.metric("F1-score", f"{res.get('f1', 0):.4f}")
     else:
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            st.metric("🏆 Best Model", res["best_model"].replace("_Specialist", ""))
         with col2:
-            st.metric("📈 R² Score", f"{res.get('r2', 0):.4f}")
+            st.metric("R squared", f"{res.get('r2', 0):.4f}")
         with col3:
-            st.metric("📉 RMSE", f"{res.get('rmse', 0):.4f}")
+            st.metric("RMSE", f"{res.get('rmse', 0):.4f}")
+
+    # --- Model comparison ---
+    if st.session_state.model_comparison_history:
+        history = st.session_state.model_comparison_history
+        st.markdown("##### Model comparison")
+        render_comparison_chart(history, task_type)
+
+        with st.expander("Detailed comparison table", expanded=False):
+            rows = []
+            for entry in history:
+                row = {
+                    "Model": entry["model"].replace("_Specialist", ""),
+                    "Profile score": f"{entry['profile_score']:.2f}",
+                    "Final score": f"{entry['final_score']:.4f}",
+                }
+                for k, v in entry["metrics"].items():
+                    row[k.upper()] = f"{v:.4f}"
+                if entry.get("cv_results") and entry["cv_results"].get("cv_mean"):
+                    row["CV mean"] = f"{entry['cv_results']['cv_mean']:.4f}"
+                rows.append(row)
+
+            st.dataframe(pd.DataFrame(rows), use_container_width=True)
 
     # --- Data profile summary ---
     if st.session_state.profile:
-        with st.expander("📋 Data Profile", expanded=False):
+        with st.expander("Data profile", expanded=False):
             p = st.session_state.profile.to_dict()
             st.json({
                 "n_samples": p["n_samples"],
@@ -948,39 +1277,18 @@ def step_results() -> None:
                 "preprocessing_needs": p["preprocessing_needs"],
             })
 
-    # --- Model comparison ---
-    if st.session_state.model_comparison_history:
-        history = st.session_state.model_comparison_history
-
-        # FIX: Plotly chart instead of broken st.markdown("```")
-        render_comparison_chart(history, task_type)
-
-        with st.expander("📊 Detailed Comparison Table", expanded=False):
-            rows = []
-            for entry in history:
-                row = {
-                    "Model": entry["model"].replace("_Specialist", ""),
-                    "Profile Score": f"{entry['profile_score']:.2f}",
-                    "Final Score": f"{entry['final_score']:.4f}",
-                }
-                for k, v in entry["metrics"].items():
-                    row[k.upper()] = f"{v:.4f}"
-                if entry.get("cv_results") and entry["cv_results"].get("cv_mean"):
-                    row["CV Mean"] = f"{entry['cv_results']['cv_mean']:.4f}"
-                rows.append(row)
-
-            df_comp = pd.DataFrame(rows)
-            st.dataframe(df_comp, use_container_width=True)
+    st.divider()
 
     # --- Download buttons ---
     col_dl1, col_dl2 = st.columns(2)
     with col_dl1:
         report_json = json.dumps(res, indent=2, ensure_ascii=False)
         st.download_button(
-            "📥 Download Report (JSON)",
+            "Download report (JSON)",
             data=report_json,
             file_name="astra_report.json",
             mime="application/json",
+            use_container_width=True,
         )
     with col_dl2:
         if st.session_state.best_model and st.session_state.best_model.is_trained:
@@ -988,18 +1296,19 @@ def step_results() -> None:
             buf = io.BytesIO()
             joblib.dump(st.session_state.best_model.model, buf)
             st.download_button(
-                "📦 Download Best Model (.pkl)",
+                "Download best model (.pkl)",
                 data=buf.getvalue(),
                 file_name=f"{st.session_state.best_model.name}.pkl",
                 mime="application/octet-stream",
+                use_container_width=True,
             )
 
     render_artifacts_browser()
 
     if st.session_state.output_dir:
-        st.success(f"📁 All artifacts saved to: **{st.session_state.output_dir}**")
+        st.caption(f"Artifacts saved to: {st.session_state.output_dir}")
 
-    if st.button("🔄 Start New Analysis", type="primary"):
+    if st.button("Start new analysis", type="primary", use_container_width=True):
         reset_session()
         st.rerun()
 
@@ -1008,18 +1317,58 @@ def step_results() -> None:
 # Main
 # ---------------------------------------------------------------------------
 
+def _render_sidebar() -> None:
+    with st.sidebar:
+        st.markdown(
+            """
+            <div class="astra-brand" style="padding:8px 0 16px 0;">
+                <div class="astra-logo">A</div>
+                <div>
+                    <div class="astra-title" style="font-size:18px;">Astra ML</div>
+                    <div class="astra-sub" style="font-size:11px;">v2.7.5</div>
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        current = st.session_state.step
+        st.markdown("##### Steps")
+        for i, label in enumerate(_STEP_LABELS):
+            disabled = i > current  # cannot jump ahead of progress
+            prefix = "•" if i == current else " "
+            if st.button(
+                f"{prefix}  {i + 1}. {label}",
+                key=f"nav_{i}",
+                disabled=disabled,
+                use_container_width=True,
+            ):
+                st.session_state.step = i
+                st.rerun()
+
+        st.divider()
+        if st.button("Reset session", use_container_width=True):
+            reset_session()
+            st.rerun()
+
+        st.caption("Local-only. Data never leaves this machine.")
+
+
 def main() -> None:
     init_state()
     init_directories()
+    inject_styles()
 
-    st.title("🌸 Astra ML System")
-    st.markdown("Automatic ML model selection based on dataset profiling")
+    _render_sidebar()
+    render_brand()
 
-    # FIX: show user-friendly error message only; full traceback goes to logs
+    # FIX (CWE-209): show a user-friendly message only. Full traceback is
+    # written to logs unconditionally, and shown in the UI ONLY when
+    # ASTRA_DEBUG=1 is set in the environment.
     if st.session_state.error_msg:
         st.error(st.session_state.error_msg)
-        if st.session_state.get("error_detail"):
-            with st.expander("🔍 Technical details (for developers)", expanded=False):
+        if DEBUG_MODE and st.session_state.get("error_detail"):
+            with st.expander("Technical details (debug mode)", expanded=False):
                 st.code(st.session_state.error_detail)
         if st.button("Clear error and restart"):
             reset_session()
@@ -1027,6 +1376,8 @@ def main() -> None:
         return
 
     step = st.session_state.step
+    render_stepper(step)
+
     if step == 0:
         step_dataset()
     elif step == 1:

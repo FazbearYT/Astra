@@ -46,6 +46,27 @@ logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
+# CV folds helper
+# ---------------------------------------------------------------------------
+
+def _effective_cv(cv: int, y: np.ndarray, task_type: str) -> int:
+    """Return a cv value that is safe for StratifiedKFold.
+
+    For classification, StratifiedKFold requires cv <= min_class_count.
+    For regression we just require cv <= n_samples and cv >= 2.
+    """
+    cv = max(2, int(cv))
+    n = len(y)
+    if task_type == "classification":
+        _, counts = np.unique(y, return_counts=True)
+        min_count = int(counts.min()) if counts.size else 0
+        if min_count < 2:
+            return 2  # caller's CV may still fail; nothing else to do
+        return min(cv, min_count, n)
+    return min(cv, n)
+
+
+# ---------------------------------------------------------------------------
 # Threading configuration (called explicitly — NOT at module import time)
 # FIX: moved from module level to avoid polluting os.environ as a side-effect
 # ---------------------------------------------------------------------------
@@ -90,6 +111,9 @@ _PARAM_LIMITS: Dict[str, Dict[str, Tuple]] = {
     },
     "NeuralNetwork_Specialist": {
         "max_iter": (int, 10, 2000),
+        "alpha": (float, 1e-7, 1.0),
+        "batch_size": (int, 1, 4096),
+        "learning_rate_init": (float, 1e-6, 1.0),
         "random_state": (int, 0, 9999),
     },
     "LogisticRegression_Specialist": {
@@ -176,8 +200,13 @@ def validate_model_params(model_name: str, params: Dict[str, Any]) -> Dict[str, 
             sanitised[key] = value
             continue
         if key == "hidden_layer_sizes":
-            # Accept list or tuple; clamp each size
-            sizes = tuple(max(1, min(int(s), 512)) for s in (value if isinstance(value, (list, tuple)) else [value]))
+            # Accept list or tuple; clamp depth and per-layer width.
+            raw = value if isinstance(value, (list, tuple)) else [value]
+            if len(raw) > 5:
+                raise ValueError(
+                    f"hidden_layer_sizes has {len(raw)} layers; max allowed is 5."
+                )
+            sizes = tuple(max(1, min(int(s), 512)) for s in raw)
             sanitised[key] = sizes
             continue
         if key == "l1_ratio":
@@ -297,9 +326,19 @@ class SpecializedModel:
         self, X: np.ndarray, y: np.ndarray, cv: int = 5, task_type: str = "classification"
     ) -> Dict[str, Any]:
         scoring = "accuracy" if task_type == "classification" else "r2"
+        # FIX: clamp cv to be feasible. StratifiedKFold (used by default for
+        # classification) requires cv <= min_class_count, otherwise it raises.
+        effective_cv = _effective_cv(cv, y, task_type)
+        if effective_cv != cv:
+            logger.warning(
+                "Reducing cv from %d to %d (insufficient samples per class).",
+                cv, effective_cv,
+            )
         with warnings.catch_warnings():
             warnings.filterwarnings("ignore", category=UserWarning, module="sklearn")
-            scores = cross_val_score(self.model, X, y, cv=cv, scoring=scoring, n_jobs=-1)
+            scores = cross_val_score(
+                self.model, X, y, cv=effective_cv, scoring=scoring, n_jobs=-1
+            )
         return {
             "cv_mean": float(scores.mean()),
             "cv_std": float(scores.std()),
@@ -480,6 +519,7 @@ class AdaptiveModelSelector:
         global_accuracy_weight: float = 0.7,
         global_f1_weight: float = 0.3,
         global_cv_weight: float = 0.0,
+        progress_cb=None,
     ) -> Tuple["SpecializedModel", np.ndarray, np.ndarray]:
         configure_threading()
 
@@ -504,6 +544,9 @@ class AdaptiveModelSelector:
             stratify=stratify_y,
         )
 
+        # FIX: clamp cv_folds upfront so the entire run uses one feasible value.
+        cv_folds = _effective_cv(cv_folds, y_train, task_type)
+
         logger.info(
             "Starting model selection | task=%s | train=%d test=%d | cv_folds=%d",
             task_type, X_train.shape[0], X_test.shape[0], cv_folds,
@@ -523,6 +566,11 @@ class AdaptiveModelSelector:
 
         for idx, (model, profile_score) in enumerate(model_scores, 1):
             logger.info("[%d/%d] %s — profile_score=%.3f", idx, total, model.name, profile_score)
+            if progress_cb is not None:
+                try:
+                    progress_cb(idx, total, model.name)
+                except Exception as cb_exc:  # progress is non-critical
+                    logger.debug("progress_cb raised: %s", cb_exc)
             try:
                 # --- Train ---
                 t0 = time.time()

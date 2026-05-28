@@ -73,9 +73,11 @@ class DatasetProfile:
 
 
 class DataProfiler:
-    def __init__(self, dataset_name: str = "unknown") -> None:
+    def __init__(self, dataset_name: str = "unknown", random_state: int = 42) -> None:
         self.dataset_name = dataset_name
         self.profile: Optional[DatasetProfile] = None
+        # FIX: local RNG instead of mutating numpy's global state.
+        self._rng = np.random.default_rng(random_state)
 
     def profile_tabular_data(
         self,
@@ -92,10 +94,11 @@ class DataProfiler:
         n_samples, n_features = X.shape
         memory_size_mb = X.nbytes / (1024 ** 2)
 
-        # Sample for profiling to keep it fast on large datasets
+        # Sample for profiling to keep it fast on large datasets.
+        # FIX: use local RNG so the global numpy random state is left untouched.
         X_work, y_work = X, y
         if n_samples > 10_000 and y is not None:
-            idx = np.random.choice(n_samples, 10_000, replace=False)
+            idx = self._rng.choice(n_samples, 10_000, replace=False)
             X_work, y_work = X[idx], y[idx]
 
         feature_profiles: List[FeatureProfile] = []

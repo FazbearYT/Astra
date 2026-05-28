@@ -1,3 +1,4 @@
+#Deprecated. Not used in program pipeline
 import sys
 import os
 from pathlib import Path
