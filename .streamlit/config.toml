@@ -4,6 +4,8 @@ port = 8501
 headless = true
 enableCORS = false
 enableXsrfProtection = true
+# Limit upload size to 50 MB (DoS mitigation)
+maxUploadSize = 50
 
 [browser]
 gatherUsageStats = false
