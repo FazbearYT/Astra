@@ -279,16 +279,12 @@ def get_accurate_config() -> PipelineConfig:
     svm.params = {"C": 5.0, "kernel": "rbf", "gamma": "scale", "probability": True, "random_state": 42}
     svm.description = "RBF SVM с высокой регуляризацией."
 
-    gb = full["GradientBoosting_Specialist"]
-
-    nn = full["NeuralNetwork_Specialist"]
-
     lr = full["LogisticRegression_Specialist"]
     lr.params = {
         "solver": "saga",
         "penalty": "elasticnet",
         "l1_ratio": 0.5,
-        "max_iter": 200,
+        "max_iter": 500,
         "random_state": 42,
     }
     lr.description = "Logistic Regression с elasticnet-регуляризацией."
@@ -296,13 +292,18 @@ def get_accurate_config() -> PipelineConfig:
     dt = full["DecisionTree_Specialist"]
     dt.params = {"max_depth": 15, "min_samples_leaf": 2, "criterion": "entropy", "random_state": 42}
 
+    knn = full["KNN_Specialist"]
+    knn.params = {"n_neighbors": 7, "weights": "distance", "p": 2, "leaf_size": 30}
+
     return PipelineConfig(
         models={
             "RandomForest_Specialist": rf,
             "SVM_Specialist": svm,
-            "GradientBoosting_Specialist": gb,
-            "NeuralNetwork_Specialist": nn,
+            "GradientBoosting_Specialist": full["GradientBoosting_Specialist"],
+            "NeuralNetwork_Specialist": full["NeuralNetwork_Specialist"],
             "LogisticRegression_Specialist": lr,
+            "KNN_Specialist": knn,
+            "GaussianNB_Specialist": full["GaussianNB_Specialist"],
             "DecisionTree_Specialist": dt,
         },
         training={"cv_folds": 10, "test_size": 0.2, "random_state": 42, "use_cv_in_scoring": True},

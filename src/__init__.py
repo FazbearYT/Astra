@@ -1,4 +1,4 @@
-__version__ = "3.0.0"
+__version__ = "3.0.1"
 __author__ = "Astra ML practicum"
 
 from .model_profiler import DataProfiler, DatasetProfile, FeatureProfile

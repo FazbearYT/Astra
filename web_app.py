@@ -51,7 +51,7 @@ MAX_ROWS = 500_000
 MAX_UPLOAD_MB = 50
 SHOW_TRACEBACK_IN_UI = False
 
-APP_VERSION = "3.0.0"
+APP_VERSION = "3.0.1"
 APP_YEAR = 2026
 APP_AUTHOR = "Fazbear · Eltex/РиМ/Astra Linux practicum"
 
@@ -678,7 +678,10 @@ def set_data_and_advance(path: Path) -> None:
 
 
 def load_preset_config(preset: str) -> None:
-    cfg_map = {"Fast": get_fast_config, "Accurate": get_accurate_config}
+    cfg_map = {
+        "Fast": get_fast_config,
+        "Accurate": get_accurate_config,
+    }
     cfg = cfg_map.get(preset, get_default_config)()
     st.session_state.config_state = {
         "training": cfg.training.copy(),
@@ -1728,7 +1731,7 @@ def render_sidebar() -> None:
         st.divider()
         st.caption(
             "Models: RandomForest, SVM, Gradient Boosting, Neural Net, "
-            "Logistic Regression."
+            "Logistic Regression, KNN, Gaussian NB, Decision Tree."
         )
 
 
