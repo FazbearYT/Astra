@@ -1,4 +1,4 @@
-__version__ = "2.1.0"
+__version__ = "2.9.0"
 __author__ = "Adaptive ML Team"
 
 from .model_profiler import DataProfiler, DatasetProfile, FeatureProfile
@@ -8,7 +8,7 @@ from .pipeline_config import (
     get_default_config,
     get_fast_config,
     get_accurate_config,
-    get_all_models_config,  # FIX: was missing from exports
+    get_all_models_config,
 )
 from .progress import PROGRESS_ENABLED, enable_progress, disable_progress
 

@@ -6,7 +6,6 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-# Maximum rows allowed when generating datasets
 MAX_DATASET_ROWS = 500_000
 
 
@@ -71,7 +70,6 @@ class DataGenerator:
                 "fare": np.random.exponential(30, n),
             }
         )
-        # FIX: explicit parentheses to clarify operator precedence
         df["target"] = (
             ((df["gender"] == 1) & (df["pclass"] < 3)) | (df["age"] < 10)
         ).astype(int)
@@ -114,11 +112,6 @@ class DataGenerator:
         return filepath
 
     def auto_detect_datasets(self) -> List[Dict]:
-        """Scan tabular_dir and return metadata for each CSV.
-
-        FIX: uses nrows=1 to get column count and iterates lines for row count
-        instead of reading the full file — much faster for large datasets.
-        """
         logger.debug("Auto-detecting datasets in %s", self.tabular_dir)
         available = []
         if not self.tabular_dir.exists():
@@ -126,11 +119,9 @@ class DataGenerator:
 
         for csv_file in self.tabular_dir.glob("*.csv"):
             try:
-                # Only read header to get column count — fast for large files
                 df_head = pd.read_csv(csv_file, nrows=1)
-                # Count rows by counting newlines in the file (subtract header)
                 with open(csv_file, "rb") as f:
-                    row_count = sum(1 for _ in f) - 1  # subtract header line
+                    row_count = sum(1 for _ in f) - 1
                 available.append(
                     {
                         "name": csv_file.stem,

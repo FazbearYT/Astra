@@ -1,19 +1,3 @@
-"""
-Astra ML System — Streamlit web application.
-
-Security hardening applied
---------------------------
-* Path traversal (CWE-22): uploaded filenames are sanitised before being used
-  as filesystem paths.
-* DoS via large uploads: Streamlit is configured to reject files > 50 MB
-  (see .streamlit/config.toml); the app additionally enforces MAX_ROWS.
-* Arbitrary model params leading to resource exhaustion: params are validated
-  by `validate_model_params()` from model_selector before use.
-* Pickle deserialization (CWE-502): joblib.load is only called for files
-  written by the app itself inside the `outputs/` directory.  User-supplied
-  binary files are never loaded.
-* Full stack traces are written to logs only — users see only a short message.
-"""
 from __future__ import annotations
 
 import io
@@ -33,13 +17,11 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
 import seaborn as sns
 import streamlit as st
 from sklearn.metrics import confusion_matrix
 
-# ---------------------------------------------------------------------------
-# Path setup
-# ---------------------------------------------------------------------------
 _SCRIPT_DIR = Path(__file__).parent
 sys.path.insert(0, str(_SCRIPT_DIR))
 
@@ -54,33 +36,305 @@ from src.pipeline_config import (
     get_fast_config,
 )
 
-# ---------------------------------------------------------------------------
-# Logging
-# ---------------------------------------------------------------------------
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
 logger = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
-# Constants
-# ---------------------------------------------------------------------------
 DATA_DIR = Path("data/tabular")
 OUTPUTS_DIR = Path("outputs")
-MAX_ROWS = 500_000          # hard limit for uploaded datasets
-MAX_UPLOAD_MB = 50          # soft limit (also enforced in config.toml)
+MAX_ROWS = 500_000
+MAX_UPLOAD_MB = 50
+SHOW_TRACEBACK_IN_UI = False
 
 st.set_page_config(
-    page_title="Astra ML System",
-    page_icon="🌸",
+    page_title="Astra ML",
+    page_icon="✨",
     layout="wide",
-    initial_sidebar_state="collapsed",
+    initial_sidebar_state="expanded",
 )
 
-# ---------------------------------------------------------------------------
-# Session state helpers
-# ---------------------------------------------------------------------------
+
+CUSTOM_CSS = """
+<style>
+:root {
+    --astra-bg: #0b0f1a;
+    --astra-surface: #131a2b;
+    --astra-surface-2: #1a2238;
+    --astra-border: rgba(148, 163, 184, 0.15);
+    --astra-accent: #7c3aed;
+    --astra-accent-2: #2dd4bf;
+    --astra-text: #e6e9f2;
+    --astra-muted: #94a3b8;
+    --astra-success: #22c55e;
+    --astra-warn: #f59e0b;
+    --astra-error: #ef4444;
+}
+
+html, body, [data-testid="stAppViewContainer"] {
+    background: radial-gradient(1200px 600px at 80% -10%, rgba(124,58,237,0.18), transparent 60%),
+                radial-gradient(900px 500px at -10% 20%, rgba(45,212,191,0.12), transparent 60%),
+                var(--astra-bg) !important;
+    color: var(--astra-text) !important;
+}
+
+[data-testid="stHeader"] {
+    background: transparent !important;
+}
+
+[data-testid="stSidebar"] {
+    background: linear-gradient(180deg, #0d1322 0%, #0b0f1a 100%) !important;
+    border-right: 1px solid var(--astra-border);
+}
+
+[data-testid="stSidebar"] * {
+    color: var(--astra-text) !important;
+}
+
+.astra-hero {
+    padding: 36px 44px;
+    border-radius: 20px;
+    background: linear-gradient(135deg, rgba(124,58,237,0.28), rgba(45,212,191,0.14));
+    border: 1px solid var(--astra-border);
+    margin-bottom: 20px;
+    box-shadow: 0 12px 32px rgba(0,0,0,0.4);
+    position: relative;
+    overflow: hidden;
+}
+.astra-hero::before {
+    content: "";
+    position: absolute;
+    top: -50%;
+    right: -10%;
+    width: 60%;
+    height: 200%;
+    background: radial-gradient(circle, rgba(124,58,237,0.18), transparent 70%);
+    pointer-events: none;
+}
+.astra-hero-title {
+    font-size: 3.4rem !important;
+    line-height: 1.05 !important;
+    margin: 0 0 10px 0 !important;
+    background: linear-gradient(90deg, #c4b5fd 0%, #818cf8 45%, #5eead4 100%);
+    -webkit-background-clip: text !important;
+    -webkit-text-fill-color: transparent !important;
+    background-clip: text !important;
+    color: transparent !important;
+    font-weight: 800;
+    letter-spacing: -0.03em;
+    display: inline-block;
+}
+.astra-hero-sub {
+    margin: 0;
+    color: #cbd5e1;
+    font-size: 1.05rem;
+    font-weight: 400;
+    max-width: 720px;
+}
+
+.astra-stepper {
+    display: flex;
+    gap: 8px;
+    margin: 14px 0 24px 0;
+    padding: 8px;
+    background: var(--astra-surface);
+    border: 1px solid var(--astra-border);
+    border-radius: 14px;
+}
+.astra-step {
+    flex: 1;
+    padding: 10px 14px;
+    border-radius: 10px;
+    background: transparent;
+    color: var(--astra-muted);
+    font-size: 0.9rem;
+    text-align: center;
+    border: 1px solid transparent;
+    transition: all 0.2s ease;
+}
+.astra-step.done {
+    color: var(--astra-accent-2);
+    border-color: rgba(45,212,191,0.25);
+    background: rgba(45,212,191,0.07);
+}
+.astra-step.active {
+    color: #fff;
+    background: linear-gradient(135deg, rgba(124,58,237,0.55), rgba(45,212,191,0.35));
+    border-color: rgba(124,58,237,0.5);
+    font-weight: 600;
+    box-shadow: 0 4px 16px rgba(124,58,237,0.25);
+}
+
+.astra-card {
+    padding: 18px 20px;
+    border-radius: 14px;
+    background: var(--astra-surface);
+    border: 1px solid var(--astra-border);
+    margin-bottom: 12px;
+    transition: transform 0.15s ease, border-color 0.15s ease;
+}
+.astra-card:hover {
+    transform: translateY(-2px);
+    border-color: rgba(124,58,237,0.45);
+}
+.astra-card h4 {
+    margin: 0 0 6px 0;
+    color: var(--astra-text);
+    font-size: 1.05rem;
+}
+.astra-card p {
+    margin: 0;
+    color: var(--astra-muted);
+    font-size: 0.9rem;
+}
+
+div[data-testid="stMetric"] {
+    background: var(--astra-surface);
+    border: 1px solid var(--astra-border);
+    border-radius: 14px;
+    padding: 14px 18px;
+    box-shadow: 0 4px 14px rgba(0,0,0,0.2);
+}
+div[data-testid="stMetricValue"] {
+    color: #c4b5fd !important;
+    font-weight: 800 !important;
+}
+div[data-testid="stMetricLabel"] {
+    color: var(--astra-muted) !important;
+    font-weight: 500 !important;
+}
+
+div.stButton > button, div.stDownloadButton > button {
+    background: linear-gradient(135deg, #7c3aed 0%, #6366f1 100%) !important;
+    color: #fff !important;
+    border: 0 !important;
+    border-radius: 10px !important;
+    padding: 10px 16px !important;
+    font-weight: 600 !important;
+    transition: transform 0.12s ease, box-shadow 0.12s ease !important;
+    box-shadow: 0 4px 14px rgba(124,58,237,0.35) !important;
+}
+div.stButton > button:hover, div.stDownloadButton > button:hover {
+    transform: translateY(-1px) !important;
+    box-shadow: 0 8px 22px rgba(124,58,237,0.45) !important;
+}
+div.stButton > button:disabled {
+    background: #2a324a !important;
+    color: #64748b !important;
+    box-shadow: none !important;
+}
+
+[data-testid="stExpander"] {
+    background: var(--astra-surface);
+    border: 1px solid var(--astra-border) !important;
+    border-radius: 12px !important;
+}
+[data-testid="stExpander"] summary {
+    color: var(--astra-text) !important;
+    font-weight: 500 !important;
+}
+
+[data-testid="stDataFrame"] {
+    background: var(--astra-surface);
+    border: 1px solid var(--astra-border);
+    border-radius: 12px;
+    overflow: hidden;
+}
+
+.stProgress > div > div > div > div {
+    background: linear-gradient(90deg, #7c3aed, #2dd4bf) !important;
+    border-radius: 6px;
+}
+
+[data-testid="stAlert"] {
+    border-radius: 12px !important;
+    border: 1px solid var(--astra-border) !important;
+}
+
+.astra-tag {
+    display: inline-block;
+    padding: 2px 10px;
+    border-radius: 999px;
+    background: rgba(124,58,237,0.15);
+    color: #c4b5fd;
+    font-size: 0.78rem;
+    border: 1px solid rgba(124,58,237,0.3);
+    margin-right: 6px;
+}
+.astra-tag.ok {
+    background: rgba(34,197,94,0.12);
+    color: #86efac;
+    border-color: rgba(34,197,94,0.3);
+}
+.astra-tag.warn {
+    background: rgba(245,158,11,0.12);
+    color: #fcd34d;
+    border-color: rgba(245,158,11,0.3);
+}
+
+hr {
+    border-color: var(--astra-border) !important;
+}
+
+h1, h2, h3, h4, h5, h6 {
+    color: var(--astra-text) !important;
+    letter-spacing: -0.01em;
+}
+
+.stRadio > div, .stSelectbox > div, .stTextArea textarea, .stNumberInput input {
+    background: var(--astra-surface-2) !important;
+    color: var(--astra-text) !important;
+    border-radius: 10px !important;
+}
+
+[data-testid="stFileUploader"] section {
+    background: var(--astra-surface) !important;
+    border: 1px dashed rgba(148,163,184,0.35) !important;
+    border-radius: 12px !important;
+}
+
+.astra-footer {
+    margin-top: 28px;
+    padding: 14px 18px;
+    border-top: 1px solid var(--astra-border);
+    color: var(--astra-muted);
+    font-size: 0.8rem;
+    text-align: center;
+}
+</style>
+"""
+
+STEP_LABELS = ["Data", "Pipeline", "Training", "Results"]
+
+
+def inject_css() -> None:
+    st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
+
+
+def render_hero() -> None:
+    st.markdown(
+        """
+        <div class="astra-hero">
+            <div class="astra-hero-title">Astra ML System</div>
+            <p class="astra-hero-sub">Automatic model selection driven by dataset profiling &mdash; configure, train, and ship.</p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_stepper(active: int) -> None:
+    pieces = []
+    for i, label in enumerate(STEP_LABELS):
+        cls = "astra-step"
+        if i < active:
+            cls += " done"
+        elif i == active:
+            cls += " active"
+        pieces.append(f'<div class="{cls}">{i + 1}. {label}</div>')
+    st.markdown(f'<div class="astra-stepper">{"".join(pieces)}</div>', unsafe_allow_html=True)
+
 
 def init_state() -> None:
     defaults: dict = {
@@ -95,7 +349,7 @@ def init_state() -> None:
         "pipeline_config": None,
         "training_complete": False,
         "error_msg": None,
-        "error_detail": None,      # full traceback, never shown to UI
+        "error_detail": None,
         "target_column": None,
         "feature_columns": [],
         "config_state": None,
@@ -109,15 +363,23 @@ def init_state() -> None:
             st.session_state[k] = v
 
 
+_DOMAIN_KEYS = (
+    "step", "data_path", "data_preview", "results", "profile",
+    "best_model", "X_test", "y_test", "pipeline_config",
+    "training_complete", "error_msg", "error_detail",
+    "target_column", "feature_columns", "config_state",
+    "model_comparison_history", "advanced_mode",
+    "session_id", "output_dir", "last_preset", "config_initialized",
+)
+
+
 def reset_session() -> None:
-    for key in list(st.session_state.keys()):
-        del st.session_state[key]
+    for key in _DOMAIN_KEYS:
+        if key in st.session_state:
+            del st.session_state[key]
+    st.cache_data.clear()
     init_state()
 
-
-# ---------------------------------------------------------------------------
-# Directory / session helpers
-# ---------------------------------------------------------------------------
 
 def init_directories() -> None:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -137,11 +399,6 @@ def setup_output_directory():
     return session_id, out
 
 
-# ---------------------------------------------------------------------------
-# Dataset listing — cached to avoid re-reading headers on every render
-# FIX: @st.cache_data with TTL
-# ---------------------------------------------------------------------------
-
 @st.cache_data(ttl=30)
 def get_available_datasets() -> list[dict]:
     datasets = []
@@ -149,30 +406,37 @@ def get_available_datasets() -> list[dict]:
         for csv_file in DATA_DIR.glob("*.csv"):
             try:
                 df_peek = pd.read_csv(csv_file, nrows=1)
+                size_kb = csv_file.stat().st_size / 1024.0
                 datasets.append(
-                    {"name": csv_file.stem, "path": csv_file, "cols": len(df_peek.columns)}
+                    {
+                        "name": csv_file.stem,
+                        "path": csv_file,
+                        "cols": len(df_peek.columns),
+                        "size_kb": size_kb,
+                    }
                 )
             except Exception as exc:
                 logger.warning("Skipping unreadable CSV %s: %s", csv_file, exc)
     return datasets
 
 
-# ---------------------------------------------------------------------------
-# File-upload helpers
-# ---------------------------------------------------------------------------
-
 def _sanitize_filename(raw_name: str) -> str:
-    """FIX (CWE-22): strip path components and dangerous characters.
-
-    Returns a safe filename with .csv extension, max 64 characters.
-    """
     stem = Path(raw_name).stem
     safe = re.sub(r"[^a-zA-Z0-9_\-]", "_", stem).strip("_") or "dataset"
     return safe[:64] + ".csv"
 
 
+def _safe_unique_path(base_dir: Path, filename: str) -> Path:
+    candidate = base_dir / filename
+    if not candidate.exists():
+        return candidate
+    stem = candidate.stem
+    suffix = candidate.suffix
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+    return base_dir / f"{stem}_{stamp}{suffix}"
+
+
 def detect_encoding(file_obj) -> str:
-    """Detect CSV encoding using chardet."""
     if isinstance(file_obj, (str, Path)):
         with open(file_obj, "rb") as f:
             raw = f.read(10_000)
@@ -181,14 +445,14 @@ def detect_encoding(file_obj) -> str:
         if hasattr(file_obj, "seek"):
             file_obj.seek(0)
     result = chardet.detect(raw)
-    return result["encoding"] if (result["confidence"] or 0) > 0.7 else "utf-8"
+    confidence = result.get("confidence") or 0
+    encoding = result.get("encoding") or "utf-8"
+    return encoding if confidence > 0.7 else "utf-8"
 
 
 def auto_format_dataframe(df: pd.DataFrame) -> pd.DataFrame:
-    """Clean a raw DataFrame for ML pipeline compatibility."""
     df_clean = df.copy()
 
-    # Normalise column names
     seen: dict = {}
     new_cols = []
     for col in df_clean.columns:
@@ -202,20 +466,19 @@ def auto_format_dataframe(df: pd.DataFrame) -> pd.DataFrame:
         new_cols.append(clean)
     df_clean.columns = new_cols
 
-    # Drop fully empty rows / columns
     df_clean.dropna(how="all", axis=0, inplace=True)
     df_clean.dropna(how="all", axis=1, inplace=True)
 
-    # FIX: use errors='coerce' so mixed columns convert properly;
-    # only apply conversion when at least 90 % of values parse successfully.
     for col in df_clean.select_dtypes(include="object").columns:
         converted = pd.to_numeric(df_clean[col], errors="coerce")
         if converted.notna().mean() >= 0.90:
             df_clean[col] = converted
 
-    # Normalise common null representations
-    df_clean.replace(["", " ", "NA", "N/A", "null", "NULL", "None", "nan", "NaN"], np.nan, inplace=True)
-
+    df_clean.replace(
+        ["", " ", "NA", "N/A", "null", "NULL", "None", "nan", "NaN"],
+        np.nan,
+        inplace=True,
+    )
     df_clean.dropna(how="all", inplace=True)
 
     if len(df_clean.columns) < 2:
@@ -223,13 +486,25 @@ def auto_format_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     return df_clean
 
 
-def format_and_save_csv(uploaded_file, save_path: Path) -> tuple[bool, str]:
-    """Parse, clean and save an uploaded CSV file.
-
-    FIX (CWE-22): save_path must already be sanitised by the caller.
-    """
+def _read_csv_streaming(uploaded_file, encoding: str, sep: str) -> tuple[Optional[pd.DataFrame], Optional[str]]:
     try:
-        # Check raw upload size before parsing
+        uploaded_file.seek(0)
+        chunks: list[pd.DataFrame] = []
+        rows_so_far = 0
+        for chunk in pd.read_csv(uploaded_file, encoding=encoding, sep=sep, chunksize=20_000):
+            rows_so_far += len(chunk)
+            if rows_so_far > MAX_ROWS:
+                return None, f"Dataset exceeds the maximum allowed rows ({MAX_ROWS:,})."
+            chunks.append(chunk)
+        if not chunks:
+            return None, "Empty dataset."
+        return pd.concat(chunks, ignore_index=True), None
+    except (pd.errors.ParserError, UnicodeDecodeError, ValueError) as exc:
+        return None, f"Parse error: {type(exc).__name__}"
+
+
+def format_and_save_csv(uploaded_file, save_path: Path) -> tuple[bool, str]:
+    try:
         uploaded_file.seek(0, 2)
         size_mb = uploaded_file.tell() / (1024 ** 2)
         uploaded_file.seek(0)
@@ -239,30 +514,27 @@ def format_and_save_csv(uploaded_file, save_path: Path) -> tuple[bool, str]:
         encoding = detect_encoding(uploaded_file)
         uploaded_file.seek(0)
 
-        df: Optional[pd.DataFrame] = None
+        df_head: Optional[pd.DataFrame] = None
         sep_used = ","
         for sep in (",", ";", "\t", "|"):
             try:
                 uploaded_file.seek(0)
                 tmp = pd.read_csv(uploaded_file, encoding=encoding, sep=sep, nrows=100)
                 if len(tmp.columns) > 1:
-                    df = tmp
+                    df_head = tmp
                     sep_used = sep
                     break
             except (pd.errors.ParserError, UnicodeDecodeError, ValueError):
-                # Try next separator — failure here is expected and handled below
                 continue
 
-        if df is None or len(df.columns) <= 1:
+        if df_head is None or len(df_head.columns) <= 1:
             return False, "Could not parse CSV. Please verify the file format."
 
-        uploaded_file.seek(0)
-        df_full = pd.read_csv(uploaded_file, encoding=encoding, sep=sep_used)
-
-        if len(df_full) > MAX_ROWS:
-            return False, (
-                f"Dataset has {len(df_full):,} rows. Maximum allowed: {MAX_ROWS:,}."
-            )
+        df_full, err = _read_csv_streaming(uploaded_file, encoding, sep_used)
+        if err is not None:
+            return False, err
+        if df_full is None:
+            return False, "Could not read CSV content."
 
         df_fmt = auto_format_dataframe(df_full)
 
@@ -270,11 +542,11 @@ def format_and_save_csv(uploaded_file, save_path: Path) -> tuple[bool, str]:
             return False, f"Too few rows ({len(df_fmt)}). Minimum 10 recommended."
 
         df_fmt.to_csv(save_path, index=False, encoding="utf-8")
-        return True, f"Saved successfully (separator='{sep_used}', encoding={encoding})."
+        return True, f"Saved (separator='{sep_used}', encoding={encoding})."
 
-    except Exception as exc:
+    except Exception:
         logger.exception("Error processing uploaded CSV")
-        return False, f"Error processing file: {exc}"
+        return False, "Could not process the file. See server logs for details."
 
 
 def set_data_and_advance(path: Path) -> None:
@@ -282,14 +554,10 @@ def set_data_and_advance(path: Path) -> None:
         st.session_state.data_path = path
         st.session_state.data_preview = pd.read_csv(path, nrows=100)
         st.session_state.step = 1
-    except Exception:  # noqa: BLE001
+    except Exception:
         st.session_state.error_msg = f"Could not read '{path.name}'."
         logger.exception("Failed to read dataset: %s", path)
 
-
-# ---------------------------------------------------------------------------
-# Config helpers
-# ---------------------------------------------------------------------------
 
 def load_preset_config(preset: str) -> None:
     cfg_map = {"Fast": get_fast_config, "Accurate": get_accurate_config}
@@ -316,16 +584,10 @@ def load_preset_config(preset: str) -> None:
 
 
 def build_config_from_state() -> PipelineConfig:
-    """Build PipelineConfig from session_state, validating all model params.
-
-    FIX: validate params via validate_model_params() to prevent DoS.
-    FIX: catch specific exceptions instead of bare except.
-    """
     cfg_data = st.session_state.config_state
     models: dict = {}
 
     for k, v in cfg_data["models"].items():
-        # Parse params JSON if string
         try:
             raw_params = (
                 v["params"] if isinstance(v["params"], dict) else json.loads(v["params"])
@@ -333,10 +595,8 @@ def build_config_from_state() -> PipelineConfig:
         except json.JSONDecodeError as exc:
             raise ValueError(f"Invalid JSON params for model '{k}': {exc}") from exc
 
-        # Validate / sanitise params
         safe_params = validate_model_params(v["name"], raw_params)
 
-        # Parse weights JSON if string
         try:
             weights = (
                 v["custom_scoring_weights"]
@@ -362,10 +622,6 @@ def build_config_from_state() -> PipelineConfig:
     )
 
 
-# ---------------------------------------------------------------------------
-# Output / artefacts helpers
-# ---------------------------------------------------------------------------
-
 def save_visualizations(output_dir: Path, profile, best_model, X_test, y_test) -> None:
     viz_dir = output_dir / "visualizations"
     viz_dir.mkdir(exist_ok=True)
@@ -381,9 +637,11 @@ def save_visualizations(output_dir: Path, profile, best_model, X_test, y_test) -
             y_pred = best_model.predict(X_test)
             cm = confusion_matrix(y_test, y_pred)
             fig, ax = plt.subplots(figsize=(8, 6))
-            sns.heatmap(cm, annot=True, fmt="d", cmap="Blues", ax=ax,
-                        xticklabels=np.unique(y_test), yticklabels=np.unique(y_test))
-            ax.set_title(f"Confusion Matrix — {best_model.name}")
+            sns.heatmap(
+                cm, annot=True, fmt="d", cmap="Blues", ax=ax,
+                xticklabels=np.unique(y_test), yticklabels=np.unique(y_test),
+            )
+            ax.set_title(f"Confusion Matrix - {best_model.name}")
             ax.set_xlabel("Predicted")
             ax.set_ylabel("True")
             fig.savefig(str(viz_dir / "confusion_matrix.png"), dpi=300, bbox_inches="tight")
@@ -394,9 +652,8 @@ def save_visualizations(output_dir: Path, profile, best_model, X_test, y_test) -
 
 def save_results_to_session(
     output_dir: Path, session_id: int, results: dict,
-    profile, best_model, selector, X_test, y_test
+    profile, best_model, selector, X_test, y_test,
 ) -> None:
-    # results.json
     with open(output_dir / "results.json", "w", encoding="utf-8") as f:
         json.dump(results, f, indent=2, ensure_ascii=False)
 
@@ -417,7 +674,7 @@ def save_results_to_session(
 
 def render_artifacts_browser() -> None:
     st.divider()
-    st.subheader("📦 Artifacts & Outputs")
+    st.subheader("Artifacts & Outputs")
     if not OUTPUTS_DIR.exists():
         st.info("No artifacts yet. Run an analysis first.")
         return
@@ -427,7 +684,8 @@ def render_artifacts_browser() -> None:
         st.info("No run directories found.")
         return
 
-    run_path = run_dirs[-1]
+    run_path = run_dirs[-1].resolve()
+    outputs_root = OUTPUTS_DIR.resolve()
     st.info(f"Showing artifacts from **{run_path.name}**")
 
     files = sorted(f for f in run_path.rglob("*") if f.is_file())
@@ -436,141 +694,232 @@ def render_artifacts_browser() -> None:
         return
 
     for file_path in files:
-        rel = file_path.relative_to(run_path)
-        with st.expander(f"📄 {rel}", expanded=False):
+        resolved = file_path.resolve()
+        try:
+            resolved.relative_to(outputs_root)
+        except ValueError:
+            continue
+        rel = resolved.relative_to(run_path)
+        with st.expander(f"{rel}", expanded=False):
             col_view, col_dl = st.columns([1, 1])
             with col_view:
-                suf = file_path.suffix.lower()
+                suf = resolved.suffix.lower()
                 if suf in (".png", ".jpg", ".jpeg", ".svg"):
-                    st.image(str(file_path))
+                    st.image(str(resolved))
                 elif suf == ".json":
-                    with open(file_path, "r", encoding="utf-8") as f:
-                        st.json(json.load(f))
+                    try:
+                        with open(resolved, "r", encoding="utf-8") as f:
+                            st.json(json.load(f))
+                    except Exception:
+                        st.text("Could not render JSON.")
                 elif suf == ".csv":
-                    st.dataframe(pd.read_csv(file_path), use_container_width=True)
+                    st.dataframe(pd.read_csv(resolved), use_container_width=True)
                 elif suf == ".pkl":
                     st.text("Binary model file (download to inspect locally).")
                 else:
                     st.text("No preview for this file type.")
             with col_dl:
-                with open(file_path, "rb") as f:
+                with open(resolved, "rb") as f:
                     st.download_button(
-                        "⬇️ Download",
+                        "Download",
                         data=f,
-                        file_name=file_path.name,
+                        file_name=resolved.name,
                         mime="application/octet-stream",
                         key=f"dl_{run_path.name}_{rel}",
                     )
 
 
-# ---------------------------------------------------------------------------
-# UI: model comparison chart
-# ---------------------------------------------------------------------------
-
 def render_comparison_chart(history: list, task_type: str = "classification") -> None:
-    """FIX: added Plotly bar chart for model comparison instead of broken st.markdown."""
     if not history:
         return
 
     if task_type == "classification":
         metric_keys = {"Accuracy": "accuracy", "F1-Score": "f1"}
     else:
-        metric_keys = {"R² Score": "r2", "MSE": "mse"}
+        metric_keys = {"R2 Score": "r2", "MSE": "mse"}
 
     rows = []
     for entry in history:
         for label, key in metric_keys.items():
+            val = float(entry["metrics"].get(key, 0.0) or 0.0)
             rows.append({
                 "Model": entry["model"].replace("_Specialist", ""),
                 "Metric": label,
-                "Value": entry["metrics"].get(key, 0.0),
+                "Value": val,
+                "Label": f"{val:.3f}",
             })
 
+    df = pd.DataFrame(rows)
+    model_order = (
+        df.groupby("Model")["Value"].max().sort_values(ascending=False).index.tolist()
+    )
+
     fig = px.bar(
-        pd.DataFrame(rows),
+        df,
         x="Model", y="Value", color="Metric",
         barmode="group",
-        title="Model Performance Comparison",
-        color_discrete_sequence=px.colors.qualitative.Set2,
+        title="Model performance comparison",
+        text="Label",
+        color_discrete_sequence=["#a78bfa", "#34d399"],
+        category_orders={"Model": model_order},
     )
-    fig.update_layout(yaxis_range=[0, 1] if task_type == "classification" else None)
+    fig.update_traces(
+        textposition="outside",
+        textfont=dict(color="#e6e9f2", size=11),
+        cliponaxis=False,
+    )
+    fig.update_layout(
+        yaxis_range=[0, 1.08] if task_type == "classification" else None,
+        plot_bgcolor="rgba(0,0,0,0)",
+        paper_bgcolor="rgba(0,0,0,0)",
+        font_color="#e6e9f2",
+        title_font_color="#e6e9f2",
+        legend=dict(bgcolor="rgba(0,0,0,0)"),
+        margin=dict(l=10, r=10, t=50, b=10),
+        bargap=0.25,
+        bargroupgap=0.08,
+    )
+    fig.update_xaxes(showgrid=False, color="#94a3b8", type="category")
+    fig.update_yaxes(gridcolor="rgba(148,163,184,0.15)", color="#94a3b8")
     st.plotly_chart(fig, use_container_width=True)
 
 
-# ---------------------------------------------------------------------------
-# Step 1 — Dataset selection
-# ---------------------------------------------------------------------------
+def render_confusion_plotly(y_true: np.ndarray, y_pred: np.ndarray, model_name: str) -> None:
+    try:
+        labels = np.unique(np.concatenate([np.asarray(y_true), np.asarray(y_pred)]))
+        cm = confusion_matrix(y_true, y_pred, labels=labels)
+        label_strs = [str(l) for l in labels]
+        text = [[str(int(v)) for v in row] for row in cm]
+        fig = go.Figure(
+            data=go.Heatmap(
+                z=cm,
+                x=label_strs,
+                y=label_strs,
+                colorscale=[
+                    [0.0, "#0f172a"],
+                    [0.25, "#3730a3"],
+                    [0.55, "#7c3aed"],
+                    [0.85, "#06b6d4"],
+                    [1.0, "#5eead4"],
+                ],
+                text=text,
+                texttemplate="%{text}",
+                textfont=dict(color="#ffffff", size=14, family="Inter, sans-serif"),
+                xgap=2,
+                ygap=2,
+                hovertemplate="True %{y} - Predicted %{x}: %{z}<extra></extra>",
+                showscale=True,
+                colorbar=dict(
+                    title=dict(text="Count", font=dict(color="#e6e9f2")),
+                    tickfont=dict(color="#94a3b8"),
+                    outlinewidth=0,
+                ),
+                zmin=0,
+            )
+        )
+        n = max(len(label_strs), 1)
+        height = max(360, min(640, 120 + 60 * n))
+        fig.update_layout(
+            title=dict(text=f"Confusion matrix - {model_name}", font=dict(color="#e6e9f2", size=18)),
+            plot_bgcolor="rgba(0,0,0,0)",
+            paper_bgcolor="rgba(0,0,0,0)",
+            font_color="#e6e9f2",
+            xaxis=dict(
+                title="Predicted",
+                type="category",
+                color="#94a3b8",
+                showgrid=False,
+                tickfont=dict(color="#cbd5e1"),
+            ),
+            yaxis=dict(
+                title="True",
+                type="category",
+                color="#94a3b8",
+                showgrid=False,
+                tickfont=dict(color="#cbd5e1"),
+                autorange="reversed",
+            ),
+            margin=dict(l=60, r=20, t=60, b=50),
+            height=height,
+        )
+        st.plotly_chart(fig, use_container_width=True)
+    except Exception as exc:
+        logger.warning("Confusion plot failed: %s", exc)
+        st.info("Confusion matrix not available for this run.")
+
 
 def step_dataset() -> None:
-    st.header("Step 1: Select Data")
-    st.progress(0.25)
+    st.header("Step 1 - Select data")
 
-    st.subheader("Available Datasets")
     datasets = get_available_datasets()
     if datasets:
+        st.subheader("Available datasets")
         cols = st.columns(min(3, len(datasets)))
         for idx, ds in enumerate(datasets):
             with cols[idx % len(cols)]:
+                st.markdown(
+                    f"""
+                    <div class="astra-card">
+                        <h4>{ds['name']}</h4>
+                        <p>{ds['cols']} columns &nbsp;·&nbsp; {ds['size_kb']:.1f} KB</p>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
                 st.button(
-                    f"📊 {ds['name']}\n({ds['cols']} columns)",
+                    "Use this dataset",
                     key=f"load_{ds['name']}",
                     on_click=set_data_and_advance,
                     args=(ds["path"],),
                     use_container_width=True,
                 )
     else:
-        st.info("No datasets found in `data/tabular`. Upload a CSV or create a test dataset.")
+        st.info("No datasets found in `data/tabular`. Upload a CSV or create a test dataset below.")
 
     st.divider()
     col_upload, col_create = st.columns(2)
 
-    # --- Upload ---
     with col_upload:
-        with st.expander("📤 Upload CSV (Auto-Format Enabled)", expanded=False):
+        with st.expander("Upload CSV (auto-format enabled)", expanded=False):
             st.markdown(
                 """
-**CSV requirements**
+**Requirements**
 - First row = column headers
 - At least one target column
 - Minimum 10 rows
+- Max file size 50 MB / 500,000 rows
 
 **Auto-formatting**
-- Encoding detection (UTF-8, Windows-1251, Latin-1…)
+- Encoding detection (UTF-8, Windows-1251, Latin-1)
 - Separator detection (`,` `;` `\\t` `|`)
 - Column name sanitisation
 - Empty row/column removal
 - Numeric string conversion
-- Common null normalisation
+- Null normalisation
                 """
             )
             uploaded = st.file_uploader("Select CSV", type=["csv"], key="upload_csv")
             if uploaded is not None:
-                # FIX (CWE-22): sanitise filename before writing to disk
                 safe_name = _sanitize_filename(uploaded.name)
-                save_path = DATA_DIR / safe_name
+                save_path = _safe_unique_path(DATA_DIR, safe_name)
 
-                # Prevent duplicate names from colliding
-                if save_path.exists():
-                    stem = save_path.stem
-                    save_path = DATA_DIR / f"{stem}_{datetime.now().strftime('%H%M%S')}.csv"
-
-                with st.spinner("🔄 Auto-formatting…"):
+                with st.spinner("Auto-formatting..."):
                     success, message = format_and_save_csv(uploaded, save_path)
                 if success:
-                    st.success(f"✅ {message}")
-                    st.cache_data.clear()  # invalidate dataset list cache
+                    st.success(message)
+                    st.cache_data.clear()
                     try:
                         st.dataframe(pd.read_csv(save_path, nrows=10), use_container_width=True)
                         set_data_and_advance(save_path)
                         st.rerun()
-                    except Exception as exc:
-                        st.error(f"Error reading formatted file: {exc}")
+                    except Exception:
+                        logger.exception("Failed to load freshly saved CSV")
+                        st.error("Could not read the freshly saved file.")
                 else:
-                    st.error(f"❌ {message}")
+                    st.error(message)
 
-    # --- Create test datasets ---
     with col_create:
-        with st.expander("🧪 Create Test Dataset", expanded=False):
+        with st.expander("Create test dataset", expanded=False):
             st.markdown("Generate built-in datasets for quick testing.")
             gen = DataGenerator(data_dir=Path("data"))
             creators = {
@@ -583,44 +932,41 @@ def step_dataset() -> None:
             }
             for ds_name, creator in creators.items():
                 if st.button(f"Create '{ds_name}'", key=f"create_{ds_name}", use_container_width=True):
-                    with st.spinner(f"Creating '{ds_name}'…"):
+                    with st.spinner(f"Creating '{ds_name}'..."):
                         try:
                             path = creator()
                             st.cache_data.clear()
                             set_data_and_advance(path)
                             st.rerun()
-                        except Exception as create_exc:
-                            st.error(f"Failed to create dataset: {create_exc}")
+                        except Exception:
+                            logger.exception("Dataset creation failed")
+                            st.error("Failed to create dataset.")
 
-
-# ---------------------------------------------------------------------------
-# Step 2 — Pipeline configuration
-# ---------------------------------------------------------------------------
 
 def step_pipeline() -> None:
-    st.header("Step 2: Pipeline Configuration")
-    st.progress(0.5)
+    st.header("Step 2 - Pipeline configuration")
 
     if st.session_state.data_preview is None:
         st.warning("Please select data in Step 1 first.")
-        if st.button("← Back to data selection"):
+        if st.button("Back to data selection"):
             st.session_state.step = 0
             st.rerun()
         return
 
-    st.success(f"Dataset: `{st.session_state.data_path.name}`")
+    st.markdown(
+        f'<span class="astra-tag ok">Dataset: {st.session_state.data_path.name}</span>',
+        unsafe_allow_html=True,
+    )
     st.dataframe(st.session_state.data_preview, use_container_width=True)
 
-    # FIX: user explicitly selects the target column
     cols = list(st.session_state.data_preview.columns)
-    # Guess a sensible default: last column, or first matching common name
     _candidates = ["target", "class", "label", "category", "target_name"]
     default_idx = next(
         (cols.index(c) for c in _candidates if c in cols),
         len(cols) - 1,
     )
     target_col = st.selectbox(
-        "🎯 Target column",
+        "Target column",
         options=cols,
         index=default_idx,
         help="Select the column the model should learn to predict.",
@@ -633,10 +979,11 @@ def step_pipeline() -> None:
         load_preset_config("Standard")
 
     preset_mode = st.radio(
-        "Configuration mode:",
+        "Configuration mode",
         ["Fast", "Standard", "Accurate", "Advanced Customization"],
         index=1,
         key="preset_mode_radio",
+        horizontal=True,
     )
 
     if preset_mode != "Advanced Customization":
@@ -644,16 +991,14 @@ def step_pipeline() -> None:
             load_preset_config(preset_mode)
             st.session_state.last_preset = preset_mode
 
-        st.info(f"Using **{preset_mode}** preset.")
         cfg = st.session_state.config_state
-        st.json({
-            "models_enabled": sum(1 for m in cfg["models"].values() if m["enabled"]),
-            "cv_folds": cfg["training"].get("cv_folds", 5),
-            "test_size": cfg["training"].get("test_size", 0.2),
-            "scoring_weights": cfg["scoring"],
-        })
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Models enabled", sum(1 for m in cfg["models"].values() if m["enabled"]))
+        c2.metric("CV folds", cfg["training"].get("cv_folds", 5))
+        c3.metric("Test size", f"{cfg['training'].get('test_size', 0.2):.0%}")
+        c4.metric("Mode", preset_mode)
     else:
-        st.subheader("Advanced Pipeline Configuration")
+        st.subheader("Advanced pipeline configuration")
         st.warning("Fine-tune all parameters manually.")
 
         if not st.session_state.get("config_initialized"):
@@ -663,77 +1008,94 @@ def step_pipeline() -> None:
         with st.form("advanced_config_form"):
             cfg_s = st.session_state.config_state
             cv_folds = st.number_input(
-                "CV Folds", value=cfg_s["training"].get("cv_folds", 5), min_value=2, max_value=20
+                "CV folds", value=cfg_s["training"].get("cv_folds", 5), min_value=2, max_value=20,
             )
             test_size = st.slider(
-                "Test Size", 0.1, 0.4, value=cfg_s["training"].get("test_size", 0.2), step=0.05
+                "Test size", 0.1, 0.4, value=cfg_s["training"].get("test_size", 0.2), step=0.05,
             )
             use_cv = st.checkbox(
-                "Use CV in Final Scoring", value=cfg_s["training"].get("use_cv_in_scoring", False)
+                "Use CV in final scoring",
+                value=cfg_s["training"].get("use_cv_in_scoring", False),
             )
 
             c1, c2, c3 = st.columns(3)
             with c1:
-                aw = st.slider("Global Accuracy Weight", 0.0, 1.0,
-                               value=cfg_s["scoring"].get("accuracy_weight", 0.7), step=0.05)
+                aw = st.slider(
+                    "Global accuracy weight", 0.0, 1.0,
+                    value=cfg_s["scoring"].get("accuracy_weight", 0.7), step=0.05,
+                )
             with c2:
-                fw = st.slider("Global F1 Weight", 0.0, 1.0,
-                               value=cfg_s["scoring"].get("f1_weight", 0.3), step=0.05)
+                fw = st.slider(
+                    "Global F1 weight", 0.0, 1.0,
+                    value=cfg_s["scoring"].get("f1_weight", 0.3), step=0.05,
+                )
             with c3:
-                cw = st.slider("Global CV Weight", 0.0, 1.0,
-                               value=cfg_s["scoring"].get("cv_weight", 0.0), step=0.05)
+                cw = st.slider(
+                    "Global CV weight", 0.0, 1.0,
+                    value=cfg_s["scoring"].get("cv_weight", 0.0), step=0.05,
+                )
 
             st.divider()
             st.markdown("### Model-specific configuration")
 
             model_updates: dict = {}
             for model_key, model_data in cfg_s["models"].items():
-                with st.expander(f"🔧 {model_data['name']}", expanded=False):
+                with st.expander(f"{model_data['name']}", expanded=False):
                     col_en, col_desc = st.columns([1, 3])
                     with col_en:
-                        enabled = st.checkbox("Enabled", value=model_data.get("enabled", True),
-                                              key=f"en_{model_key}")
+                        enabled = st.checkbox(
+                            "Enabled", value=model_data.get("enabled", True),
+                            key=f"en_{model_key}",
+                        )
                     with col_desc:
                         st.markdown(f"*{model_data.get('description', '')}*")
 
                     st.markdown("**Hyperparameters (JSON)**")
                     params_json = json.dumps(model_data.get("params", {}), indent=2)
                     raw_params_str = st.text_area(
-                        "Params", value=params_json, height=100, key=f"p_{model_key}"
+                        "Params", value=params_json, height=100, key=f"p_{model_key}",
                     )
 
-                    # FIX: specific exception, show clear error
                     try:
                         parsed_params = json.loads(raw_params_str)
                     except json.JSONDecodeError as exc:
                         st.error(f"Invalid JSON: {exc}")
                         parsed_params = model_data.get("params", {})
 
-                    st.markdown("**Custom Scoring Weights** *(overrides global)*")
+                    st.markdown("**Custom scoring weights** *(overrides global)*")
                     wc1, wc2, wc3 = st.columns(3)
                     existing_w = model_data.get("custom_scoring_weights", {})
                     with wc1:
-                        m_aw = st.slider("Acc", 0.0, 1.0,
-                                         value=existing_w.get("accuracy_weight", cfg_s["scoring"]["accuracy_weight"]),
-                                         step=0.05, key=f"aw_{model_key}")
+                        m_aw = st.slider(
+                            "Acc", 0.0, 1.0,
+                            value=existing_w.get("accuracy_weight", cfg_s["scoring"]["accuracy_weight"]),
+                            step=0.05, key=f"aw_{model_key}",
+                        )
                     with wc2:
-                        m_fw = st.slider("F1", 0.0, 1.0,
-                                         value=existing_w.get("f1_weight", cfg_s["scoring"]["f1_weight"]),
-                                         step=0.05, key=f"fw_{model_key}")
+                        m_fw = st.slider(
+                            "F1", 0.0, 1.0,
+                            value=existing_w.get("f1_weight", cfg_s["scoring"]["f1_weight"]),
+                            step=0.05, key=f"fw_{model_key}",
+                        )
                     with wc3:
-                        m_cw = st.slider("CV", 0.0, 1.0,
-                                         value=existing_w.get("cv_weight", cfg_s["scoring"]["cv_weight"]),
-                                         step=0.05, key=f"cw_{model_key}")
+                        m_cw = st.slider(
+                            "CV", 0.0, 1.0,
+                            value=existing_w.get("cv_weight", cfg_s["scoring"]["cv_weight"]),
+                            step=0.05, key=f"cw_{model_key}",
+                        )
 
                     model_updates[model_key] = {
                         "enabled": enabled,
                         "params": parsed_params,
-                        "custom_scoring_weights": {"accuracy_weight": m_aw, "f1_weight": m_fw, "cv_weight": m_cw},
+                        "custom_scoring_weights": {
+                            "accuracy_weight": m_aw,
+                            "f1_weight": m_fw,
+                            "cv_weight": m_cw,
+                        },
                     }
 
-            submitted = st.form_submit_button("Apply Advanced Configuration", type="primary")
+            submitted = st.form_submit_button("Apply advanced configuration", type="primary")
             if submitted:
-                # Apply updates
                 cfg_s["training"]["cv_folds"] = cv_folds
                 cfg_s["training"]["test_size"] = test_size
                 cfg_s["training"]["use_cv_in_scoring"] = use_cv
@@ -742,15 +1104,15 @@ def step_pipeline() -> None:
                 cfg_s["scoring"]["cv_weight"] = cw
                 for mk, upd in model_updates.items():
                     cfg_s["models"][mk].update(upd)
-                st.success("Advanced configuration applied!")
+                st.success("Advanced configuration applied.")
 
     col_back, col_run = st.columns(2)
     with col_back:
-        if st.button("← Back"):
+        if st.button("Back"):
             st.session_state.step = 0
             st.rerun()
     with col_run:
-        if st.button("Save & Start Training", type="primary"):
+        if st.button("Save & start training", type="primary"):
             try:
                 config_obj = build_config_from_state()
                 st.session_state.pipeline_config = config_obj
@@ -760,23 +1122,19 @@ def step_pipeline() -> None:
                 st.error(f"Configuration error: {exc}")
 
 
-# ---------------------------------------------------------------------------
-# Step 3 — Training
-# ---------------------------------------------------------------------------
-
 def step_training() -> None:
-    st.header("Step 3: Model Training")
+    st.header("Step 3 - Model training")
 
     if st.session_state.data_path is None or st.session_state.pipeline_config is None:
         st.warning("Missing data or configuration. Please go back.")
-        if st.button("← Back to configuration"):
+        if st.button("Back to configuration"):
             st.session_state.step = 1
             st.rerun()
         return
 
     if st.session_state.training_complete:
         st.success("Training completed.")
-        if st.button("View Results →", type="primary"):
+        if st.button("View results", type="primary"):
             st.session_state.step = 3
             st.rerun()
         return
@@ -789,16 +1147,13 @@ def step_training() -> None:
     status_text = st.empty()
 
     try:
-        # 1. Load data
-        status_text.text("Loading dataset…")
+        status_text.markdown("Loading dataset...")
         progress_bar.progress(10)
         data = pd.read_csv(st.session_state.data_path)
         config = st.session_state.pipeline_config
 
-        # 2. Resolve target column (set in step_pipeline)
         target_column = st.session_state.get("target_column")
         if target_column is None or target_column not in data.columns:
-            # Fallback auto-detection
             for candidate in ("target", "class", "label", "category", "target_name"):
                 if candidate in data.columns:
                     target_column = candidate
@@ -819,32 +1174,29 @@ def step_training() -> None:
         st.session_state.feature_columns = feature_columns
         X = data[feature_columns].values
 
-        # 3. Profile
-        status_text.text("Profiling data…")
+        status_text.markdown("Profiling data...")
         progress_bar.progress(25)
         profiler = DataProfiler(dataset_name=st.session_state.data_path.stem)
         profile = profiler.profile_tabular_data(X, y, feature_names=feature_columns)
         st.session_state.profile = profile
         task_type = profile.task_type
 
-        # 4. Register models
-        status_text.text("Preparing models…")
+        status_text.markdown("Preparing models...")
         progress_bar.progress(40)
         selector = AdaptiveModelSelector()
         selector.register_models_from_pipeline_config(config, task_type=task_type)
         total_models = len(selector.models)
 
-        # 5. Train & select — dynamic progress
         for i in range(total_models):
             pct = 40 + int(50 * (i / total_models))
-            status_text.text(f"Training model {i + 1} / {total_models}…")
+            status_text.markdown(f"Training model {i + 1} / {total_models}...")
             progress_bar.progress(pct)
 
         best_model, X_test, y_test = selector.profile_and_select(
             X, y,
             data_profile=profile.to_dict(),
             cv_folds=config.training.get("cv_folds", 5),
-            test_size=config.training.get("test_size", 0.2),    # FIX: pass from config
+            test_size=config.training.get("test_size", 0.2),
             random_state=config.training.get("random_state", 42),
             use_cv_in_scoring=config.training.get("use_cv_in_scoring", False),
             global_accuracy_weight=config.scoring.get("accuracy_weight", 0.7),
@@ -859,12 +1211,17 @@ def step_training() -> None:
         if hasattr(selector, "selection_history") and selector.selection_history:
             st.session_state.model_comparison_history = selector.selection_history
 
-        # 6. Build results dict (task-type aware)
         metrics = best_model.performance_metrics
         if task_type == "classification":
-            primary_metric = {"accuracy": float(metrics.get("accuracy", 0)), "f1": float(metrics.get("f1", 0))}
+            primary_metric = {
+                "accuracy": float(metrics.get("accuracy", 0)),
+                "f1": float(metrics.get("f1", 0)),
+            }
         else:
-            primary_metric = {"r2": float(metrics.get("r2", 0)), "rmse": float(metrics.get("rmse", 0))}
+            primary_metric = {
+                "r2": float(metrics.get("r2", 0)),
+                "rmse": float(metrics.get("rmse", 0)),
+            }
 
         st.session_state.results = {
             "session_id": session_id,
@@ -877,9 +1234,11 @@ def step_training() -> None:
         }
 
         progress_bar.progress(90)
-        status_text.text("Saving artefacts…")
-        save_results_to_session(output_dir, session_id, st.session_state.results,
-                                profile, best_model, selector, X_test, y_test)
+        status_text.markdown("Saving artefacts...")
+        save_results_to_session(
+            output_dir, session_id, st.session_state.results,
+            profile, best_model, selector, X_test, y_test,
+        )
         progress_bar.progress(100)
         status_text.empty()
 
@@ -888,24 +1247,18 @@ def step_training() -> None:
         st.rerun()
 
     except Exception as exc:
-        # FIX: log full traceback; show user-friendly message only
         logger.exception("Training failed")
-        st.session_state.error_msg = f"Training error: {type(exc).__name__}: {exc}"
+        st.session_state.error_msg = f"Training error: {type(exc).__name__}"
         st.session_state.error_detail = traceback.format_exc()
         st.rerun()
 
 
-# ---------------------------------------------------------------------------
-# Step 4 — Results
-# ---------------------------------------------------------------------------
-
 def step_results() -> None:
-    st.header("Step 4: Results")
-    st.progress(1.0)
+    st.header("Step 4 - Results")
 
     if not st.session_state.training_complete or st.session_state.results is None:
         st.warning("No results available.")
-        if st.button("← Back to training"):
+        if st.button("Back to training"):
             st.session_state.step = 2
             st.rerun()
         return
@@ -914,29 +1267,31 @@ def step_results() -> None:
     task_type: str = res.get("task_type", "classification")
 
     if st.session_state.session_id:
-        st.info(f"✅ Session **{st.session_state.session_id:03d}** completed!")
+        st.markdown(
+            f'<span class="astra-tag ok">Session #{st.session_state.session_id:03d} completed</span>',
+            unsafe_allow_html=True,
+        )
+        st.write("")
 
-    # --- Key metrics ---
     if task_type == "classification":
         col1, col2, col3 = st.columns(3)
         with col1:
-            st.metric("🏆 Best Model", res["best_model"].replace("_Specialist", ""))
+            st.metric("Best model", res["best_model"].replace("_Specialist", ""))
         with col2:
-            st.metric("🎯 Accuracy", f"{res.get('accuracy', 0):.4f}")
+            st.metric("Accuracy", f"{res.get('accuracy', 0):.4f}")
         with col3:
-            st.metric("📊 F1-Score", f"{res.get('f1', 0):.4f}")
+            st.metric("F1 score", f"{res.get('f1', 0):.4f}")
     else:
         col1, col2, col3 = st.columns(3)
         with col1:
-            st.metric("🏆 Best Model", res["best_model"].replace("_Specialist", ""))
+            st.metric("Best model", res["best_model"].replace("_Specialist", ""))
         with col2:
-            st.metric("📈 R² Score", f"{res.get('r2', 0):.4f}")
+            st.metric("R2 score", f"{res.get('r2', 0):.4f}")
         with col3:
-            st.metric("📉 RMSE", f"{res.get('rmse', 0):.4f}")
+            st.metric("RMSE", f"{res.get('rmse', 0):.4f}")
 
-    # --- Data profile summary ---
     if st.session_state.profile:
-        with st.expander("📋 Data Profile", expanded=False):
+        with st.expander("Data profile", expanded=False):
             p = st.session_state.profile.to_dict()
             st.json({
                 "n_samples": p["n_samples"],
@@ -948,36 +1303,50 @@ def step_results() -> None:
                 "preprocessing_needs": p["preprocessing_needs"],
             })
 
-    # --- Model comparison ---
+    if (
+        task_type == "classification"
+        and st.session_state.best_model is not None
+        and st.session_state.X_test is not None
+        and st.session_state.y_test is not None
+        and st.session_state.best_model.is_trained
+    ):
+        try:
+            y_pred = st.session_state.best_model.predict(st.session_state.X_test)
+            render_confusion_plotly(
+                st.session_state.y_test, y_pred,
+                st.session_state.best_model.name.replace("_Specialist", ""),
+            )
+        except Exception as exc:
+            logger.warning("Could not render confusion matrix: %s", exc)
+
     if st.session_state.model_comparison_history:
         history = st.session_state.model_comparison_history
 
-        # FIX: Plotly chart instead of broken st.markdown("```")
-        render_comparison_chart(history, task_type)
-
-        with st.expander("📊 Detailed Comparison Table", expanded=False):
+        with st.expander("Detailed comparison table", expanded=False):
             rows = []
             for entry in history:
                 row = {
                     "Model": entry["model"].replace("_Specialist", ""),
-                    "Profile Score": f"{entry['profile_score']:.2f}",
-                    "Final Score": f"{entry['final_score']:.4f}",
+                    "Profile score": f"{entry['profile_score']:.2f}",
+                    "Final score": f"{entry['final_score']:.4f}",
                 }
                 for k, v in entry["metrics"].items():
                     row[k.upper()] = f"{v:.4f}"
                 if entry.get("cv_results") and entry["cv_results"].get("cv_mean"):
-                    row["CV Mean"] = f"{entry['cv_results']['cv_mean']:.4f}"
+                    row["CV mean"] = f"{entry['cv_results']['cv_mean']:.4f}"
                 rows.append(row)
 
             df_comp = pd.DataFrame(rows)
+            df_comp = df_comp.sort_values("Final score", ascending=False).reset_index(drop=True)
             st.dataframe(df_comp, use_container_width=True)
 
-    # --- Download buttons ---
+        render_comparison_chart(history, task_type)
+
     col_dl1, col_dl2 = st.columns(2)
     with col_dl1:
         report_json = json.dumps(res, indent=2, ensure_ascii=False)
         st.download_button(
-            "📥 Download Report (JSON)",
+            "Download report (JSON)",
             data=report_json,
             file_name="astra_report.json",
             mime="application/json",
@@ -988,7 +1357,7 @@ def step_results() -> None:
             buf = io.BytesIO()
             joblib.dump(st.session_state.best_model.model, buf)
             st.download_button(
-                "📦 Download Best Model (.pkl)",
+                "Download best model (.pkl)",
                 data=buf.getvalue(),
                 file_name=f"{st.session_state.best_model.name}.pkl",
                 mime="application/octet-stream",
@@ -997,29 +1366,57 @@ def step_results() -> None:
     render_artifacts_browser()
 
     if st.session_state.output_dir:
-        st.success(f"📁 All artifacts saved to: **{st.session_state.output_dir}**")
+        st.success(f"All artifacts saved to: {st.session_state.output_dir}")
 
-    if st.button("🔄 Start New Analysis", type="primary"):
+    if st.button("Start new analysis", type="primary"):
         reset_session()
         st.rerun()
 
 
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
+def render_sidebar() -> None:
+    with st.sidebar:
+        st.markdown("### Astra ML")
+        st.caption("v2.9.0 - dataset-driven model selection")
+        st.divider()
+
+        step = st.session_state.get("step", 0)
+        st.markdown(f"**Current step:** {STEP_LABELS[step]}")
+        st.progress((step + 1) / len(STEP_LABELS))
+
+        if st.session_state.get("data_path"):
+            st.markdown("**Dataset**")
+            st.caption(st.session_state.data_path.name)
+
+        if st.session_state.get("session_id"):
+            st.markdown("**Session**")
+            st.caption(f"run_{st.session_state.session_id:03d}")
+
+        st.divider()
+        st.markdown("**Quick actions**")
+        if st.button("Reset session", use_container_width=True):
+            reset_session()
+            st.rerun()
+
+        st.divider()
+        st.caption(
+            "Models: RandomForest, SVM, Gradient Boosting, Neural Net, "
+            "Logistic Regression."
+        )
+
 
 def main() -> None:
     init_state()
     init_directories()
+    inject_css()
 
-    st.title("🌸 Astra ML System")
-    st.markdown("Automatic ML model selection based on dataset profiling")
+    render_sidebar()
+    render_hero()
+    render_stepper(st.session_state.step)
 
-    # FIX: show user-friendly error message only; full traceback goes to logs
     if st.session_state.error_msg:
         st.error(st.session_state.error_msg)
-        if st.session_state.get("error_detail"):
-            with st.expander("🔍 Technical details (for developers)", expanded=False):
+        if SHOW_TRACEBACK_IN_UI and st.session_state.get("error_detail"):
+            with st.expander("Technical details", expanded=False):
                 st.code(st.session_state.error_detail)
         if st.button("Clear error and restart"):
             reset_session()
@@ -1035,6 +1432,11 @@ def main() -> None:
         step_training()
     elif step == 3:
         step_results()
+
+    st.markdown(
+        '<div class="astra-footer">Astra ML System &middot; v2.9.0 &middot; powered by scikit-learn</div>',
+        unsafe_allow_html=True,
+    )
 
 
 if __name__ == "__main__":

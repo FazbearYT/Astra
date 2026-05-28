@@ -2,15 +2,17 @@
 address = "localhost"
 port = 8501
 headless = true
-enableCORS = false
+enableCORS = true
 enableXsrfProtection = true
+maxUploadSize = 50
 
 [browser]
 gatherUsageStats = false
 
 [theme]
-primaryColor = "#FF6B6B"
-backgroundColor = "#FFFFFF"
-secondaryBackgroundColor = "#F0F2F6"
-textColor = "#262730"
+base = "dark"
+primaryColor = "#7c3aed"
+backgroundColor = "#0b0f1a"
+secondaryBackgroundColor = "#131a2b"
+textColor = "#e6e9f2"
 font = "sans serif"

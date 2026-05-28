@@ -1,20 +1,10 @@
-"""
-Adaptive model selector.
-
-Security notes
---------------
-* joblib.load() uses pickle internally (CWE-502 / Deserialization of Untrusted Data).
-  `SpecializedModel.load()` MUST only be called with files from a trusted, internal
-  directory.  Never expose this method to user-supplied paths.
-* Model hyperparameters coming from the UI must be validated by
-  `validate_model_params()` before being passed here (see web_app.py).
-"""
 import json
 import logging
 import os
 import time
 import warnings
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import joblib
@@ -45,13 +35,11 @@ from sklearn.svm import SVC, SVR
 logger = logging.getLogger(__name__)
 
 
-# ---------------------------------------------------------------------------
-# Threading configuration (called explicitly — NOT at module import time)
-# FIX: moved from module level to avoid polluting os.environ as a side-effect
-# ---------------------------------------------------------------------------
+MAX_HIDDEN_LAYERS = 8
+MAX_HIDDEN_LAYER_WIDTH = 512
+
 
 def configure_threading() -> None:
-    """Set thread counts for underlying BLAS/OpenMP libraries."""
     n = str(os.cpu_count() or 4)
     for var in (
         "OMP_NUM_THREADS",
@@ -64,11 +52,6 @@ def configure_threading() -> None:
     logger.debug("Threading configured: %s threads", n)
 
 
-# ---------------------------------------------------------------------------
-# Parameter validation (DoS / resource-exhaustion mitigation)
-# ---------------------------------------------------------------------------
-
-# (param_name -> (type, min_value, max_value))
 _PARAM_LIMITS: Dict[str, Dict[str, Tuple]] = {
     "RandomForest_Specialist": {
         "n_estimators": (int, 1, 500),
@@ -79,7 +62,8 @@ _PARAM_LIMITS: Dict[str, Dict[str, Tuple]] = {
     },
     "SVM_Specialist": {
         "C": (float, 1e-4, 100.0),
-        "gamma": None,          # string or float, validated separately
+        "gamma": None,
+        "degree": (int, 1, 5),
         "random_state": (int, 0, 9999),
     },
     "GradientBoosting_Specialist": {
@@ -114,27 +98,20 @@ _ALLOWED_PENALTIES_LR = {"l1", "l2", "elasticnet", None}
 
 
 def validate_model_params(model_name: str, params: Dict[str, Any]) -> Dict[str, Any]:
-    """Return a sanitised copy of *params* for *model_name*.
-
-    Unknown keys are dropped.  Values are clamped to safe ranges.
-    Raises ``ValueError`` if a required string field contains an unknown value.
-    """
     limits = _PARAM_LIMITS.get(model_name)
     if limits is None:
-        logger.warning("No param limits defined for %s — passing params as-is.", model_name)
+        logger.warning("No param limits defined for %s - passing params as-is.", model_name)
         return params.copy()
 
     sanitised: Dict[str, Any] = {}
 
-    # Always preserve random_state if present
     if "random_state" in params:
         sanitised["random_state"] = int(params["random_state"])
 
     for key, value in params.items():
         if key == "random_state":
-            continue  # already handled
+            continue
 
-        # --- string fields ---
         if key == "kernel":
             v = str(value).lower()
             if v not in _ALLOWED_KERNELS:
@@ -176,8 +153,12 @@ def validate_model_params(model_name: str, params: Dict[str, Any]) -> Dict[str, 
             sanitised[key] = value
             continue
         if key == "hidden_layer_sizes":
-            # Accept list or tuple; clamp each size
-            sizes = tuple(max(1, min(int(s), 512)) for s in (value if isinstance(value, (list, tuple)) else [value]))
+            raw = list(value) if isinstance(value, (list, tuple)) else [value]
+            if len(raw) > MAX_HIDDEN_LAYERS:
+                raise ValueError(
+                    f"hidden_layer_sizes has {len(raw)} layers; max allowed is {MAX_HIDDEN_LAYERS}."
+                )
+            sizes = tuple(max(1, min(int(s), MAX_HIDDEN_LAYER_WIDTH)) for s in raw)
             sanitised[key] = sizes
             continue
         if key == "l1_ratio":
@@ -187,7 +168,6 @@ def validate_model_params(model_name: str, params: Dict[str, Any]) -> Dict[str, 
             sanitised[key] = bool(value)
             continue
 
-        # --- numeric fields with limits ---
         spec = limits.get(key)
         if spec is None:
             logger.debug("Dropping unknown param '%s' for %s", key, model_name)
@@ -196,14 +176,9 @@ def validate_model_params(model_name: str, params: Dict[str, Any]) -> Dict[str, 
         try:
             sanitised[key] = typ(np.clip(typ(value), lo, hi))
         except (TypeError, ValueError) as exc:
-            logger.warning("Param '%s' invalid (%s) — skipping.", key, exc)
+            logger.warning("Param '%s' invalid (%s) - skipping.", key, exc)
 
     return sanitised
-
-
-# ---------------------------------------------------------------------------
-# SpecializedModel
-# ---------------------------------------------------------------------------
 
 
 class SpecializedModel:
@@ -223,8 +198,6 @@ class SpecializedModel:
         self.is_trained = False
         self.training_time: Optional[float] = None
         self.custom_scoring_weights = custom_scoring_weights or {}
-
-    # ------------------------------------------------------------------
 
     def fit(self, X: np.ndarray, y: np.ndarray, **fit_params) -> "SpecializedModel":
         start = time.time()
@@ -347,11 +320,6 @@ class SpecializedModel:
         }
 
     def save(self, filepath: str) -> None:
-        """Save model to disk.
-
-        Security note: the resulting .pkl is a pickle file. Only load it
-        from trusted, internal paths — never from user input.
-        """
         joblib.dump(
             {
                 "name": self.name,
@@ -369,14 +337,7 @@ class SpecializedModel:
 
     @classmethod
     def load(cls, filepath: str) -> "SpecializedModel":
-        """Load model from a trusted internal path.
-
-        WARNING (CWE-502): joblib.load() is based on pickle and can execute
-        arbitrary code if the file has been tampered with.  Call this method
-        ONLY for files written by `SpecializedModel.save()` in a
-        controlled, non-user-accessible directory.
-        """
-        data = joblib.load(filepath)  # noqa: S301
+        data = joblib.load(filepath)
         obj = cls(
             name=data["name"],
             model=data["model"],
@@ -390,11 +351,6 @@ class SpecializedModel:
         return obj
 
 
-# ---------------------------------------------------------------------------
-# AdaptiveModelSelector
-# ---------------------------------------------------------------------------
-
-
 class AdaptiveModelSelector:
     def __init__(self) -> None:
         self.models: List[SpecializedModel] = []
@@ -404,8 +360,6 @@ class AdaptiveModelSelector:
 
     def register_model(self, model: SpecializedModel) -> None:
         self.models.append(model)
-
-    # ------------------------------------------------------------------
 
     def _get_sklearn_model_instance(
         self, model_name: str, params: Dict[str, Any], task_type: str = "classification"
@@ -459,13 +413,10 @@ class AdaptiveModelSelector:
                     )
                 )
             except (ValueError, TypeError) as exc:
-                # FIX: log instead of silently swallowing
                 logger.warning("Skipping model '%s': %s", model_key, exc)
 
         if not self.models:
             raise ValueError("No models were enabled or successfully registered.")
-
-    # ------------------------------------------------------------------
 
     def profile_and_select(
         self,
@@ -473,7 +424,6 @@ class AdaptiveModelSelector:
         y: np.ndarray,
         data_profile: Optional[Dict] = None,
         cv_folds: int = 5,
-        # FIX: test_size and random_state are now proper parameters
         test_size: float = 0.2,
         random_state: int = 42,
         use_cv_in_scoring: bool = False,
@@ -495,12 +445,11 @@ class AdaptiveModelSelector:
         self.data_profile = data_profile
         task_type: str = data_profile.get("task_type", "classification")
 
-        # Stratified split for classification only
         stratify_y = y if (task_type == "classification" and len(np.unique(y)) > 1) else None
         X_train, X_test, y_train, y_test = train_test_split(
             X, y,
-            test_size=test_size,          # FIX: use parameter, not hardcoded 0.2
-            random_state=random_state,    # FIX: use parameter
+            test_size=test_size,
+            random_state=random_state,
             stratify=stratify_y,
         )
 
@@ -512,7 +461,6 @@ class AdaptiveModelSelector:
         if not self.models:
             raise ValueError("No models are registered for selection.")
 
-        # Score each model against the data profile
         model_scores = [
             (model, model.matches_profile(data_profile)) for model in self.models
         ]
@@ -522,30 +470,26 @@ class AdaptiveModelSelector:
         total = len(model_scores)
 
         for idx, (model, profile_score) in enumerate(model_scores, 1):
-            logger.info("[%d/%d] %s — profile_score=%.3f", idx, total, model.name, profile_score)
+            logger.info("[%d/%d] %s - profile_score=%.3f", idx, total, model.name, profile_score)
             try:
-                # --- Train ---
                 t0 = time.time()
                 model.fit(X_train, y_train)
                 train_time = time.time() - t0
                 logger.info("  Trained in %.2fs", train_time)
 
-                # --- Evaluate on test set ---
                 metrics = model.evaluate(X_test, y_test, task_type=task_type)
                 logger.info("  Metrics: %s", {k: f"{v:.4f}" for k, v in metrics.items()})
 
-                # FIX: only run CV when it will actually affect the score
                 cv_results: Dict[str, Any] = {"cv_mean": 0.0, "cv_std": 0.0, "cv_scores": []}
                 if use_cv_in_scoring or global_cv_weight > 0:
                     cv_results = model.cross_validate(
                         X_train, y_train, cv=cv_folds, task_type=task_type
                     )
-                    logger.info("  CV mean=%.4f ± %.4f", cv_results["cv_mean"], cv_results["cv_std"])
+                    logger.info("  CV mean=%.4f +/- %.4f", cv_results["cv_mean"], cv_results["cv_std"])
 
-                # --- Compute final score ---
                 acc_w = model.custom_scoring_weights.get("accuracy_weight", global_accuracy_weight)
-                f1_w  = model.custom_scoring_weights.get("f1_weight", global_f1_weight)
-                cv_w  = model.custom_scoring_weights.get("cv_weight", global_cv_weight)
+                f1_w = model.custom_scoring_weights.get("f1_weight", global_f1_weight)
+                cv_w = model.custom_scoring_weights.get("cv_weight", global_cv_weight)
 
                 if task_type == "classification":
                     raw = (
@@ -553,11 +497,10 @@ class AdaptiveModelSelector:
                         + metrics.get("f1", 0.0) * f1_w
                         + (cv_results["cv_mean"] * cv_w if use_cv_in_scoring else 0.0)
                     )
-                    # FIX: normalise so score is always in [0, 1]
                     total_w = acc_w + f1_w + (cv_w if use_cv_in_scoring else 0.0)
                     final_score = raw / total_w if total_w > 0 else raw
                 else:
-                    r2_w   = model.custom_scoring_weights.get("r2_weight", global_accuracy_weight)
+                    r2_w = model.custom_scoring_weights.get("r2_weight", global_accuracy_weight)
                     rmse_w = model.custom_scoring_weights.get("rmse_weight", global_f1_weight)
                     rmse_score = 1.0 / (1.0 + metrics.get("rmse", 1.0))
                     raw = (
@@ -598,7 +541,6 @@ class AdaptiveModelSelector:
 
         sorted_results = sorted(results_table, key=lambda x: x["final_score"], reverse=True)
 
-        # Log summary table
         header = f"{'Model':<32} {'Score':<10}"
         logger.info("Model comparison:\n%s\n%s", header, "-" * len(header))
         for r in sorted_results:
@@ -612,8 +554,6 @@ class AdaptiveModelSelector:
         self.best_model = best_model
         logger.info("Selected: %s (score=%.4f)", best_model.name, best_result["final_score"])
         return best_model, X_test, y_test
-
-    # ------------------------------------------------------------------
 
     def predict(self, X: np.ndarray) -> np.ndarray:
         if self.best_model is None:
@@ -647,37 +587,34 @@ class AdaptiveModelSelector:
         return saved
 
     def load_models(self, directory: str = "saved_models") -> None:
-        """Load previously saved models from *directory*.
-
-        Security: only call this for directories that were written by
-        ``save_all_models()`` and are not accessible by untrusted users.
-        """
         self.models = []
-        if not os.path.exists(directory):
+        directory_path = Path(directory)
+        if not directory_path.exists():
             logger.warning("Model directory '%s' does not exist.", directory)
             return
 
-        trusted_dir = os.path.realpath(directory)
+        trusted_root = directory_path.resolve()
         loaded = 0
-        for filename in os.listdir(directory):
-            if not filename.endswith(".pkl"):
+        for child in directory_path.iterdir():
+            if not child.is_file() or child.suffix != ".pkl":
                 continue
-            filepath = os.path.join(directory, filename)
-            # Security: ensure resolved path stays inside trusted_dir
-            if not os.path.realpath(filepath).startswith(trusted_dir + os.sep):
-                logger.warning("Skipping suspicious path: %s", filepath)
+            resolved = child.resolve()
+            try:
+                resolved.relative_to(trusted_root)
+            except ValueError:
+                logger.warning("Skipping suspicious path: %s", child)
                 continue
             try:
-                model = SpecializedModel.load(filepath)
+                model = SpecializedModel.load(str(resolved))
                 self.models.append(model)
                 loaded += 1
             except Exception as exc:
-                logger.warning("Failed to load '%s': %s", filename, exc)
+                logger.warning("Failed to load '%s': %s", child.name, exc)
 
         logger.info("Loaded %d models from '%s'.", loaded, directory)
 
-        history_path = os.path.join(directory, "selection_history.json")
-        if os.path.exists(history_path):
+        history_path = directory_path / "selection_history.json"
+        if history_path.exists():
             try:
                 with open(history_path, "r", encoding="utf-8") as f:
                     history = json.load(f)
@@ -690,7 +627,6 @@ class AdaptiveModelSelector:
                     for m in self.models:
                         if m.name == best_name:
                             self.best_model = m
-                            # FIX: was 'best_model.name' — NameError; correct is 'm.name'
                             logger.info("Best model restored: %s", m.name)
                             break
             except (OSError, json.JSONDecodeError, KeyError) as exc:

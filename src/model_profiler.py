@@ -56,15 +56,8 @@ class DatasetProfile:
 
     @classmethod
     def load(cls, filepath: str) -> "DatasetProfile":
-        """Load a saved profile from JSON.
-
-        FIX: correctly restores FeatureProfile dataclass instances
-        instead of leaving feature_profiles as plain dicts, which caused
-        AttributeError on every attribute access.
-        """
         with open(filepath, "r", encoding="utf-8") as f:
             data = json.load(f)
-        # Restore FeatureProfile objects from nested dicts
         raw_fps = data.get("feature_profiles", [])
         data["feature_profiles"] = [
             FeatureProfile(**fp) if isinstance(fp, dict) else fp for fp in raw_fps
@@ -92,7 +85,6 @@ class DataProfiler:
         n_samples, n_features = X.shape
         memory_size_mb = X.nbytes / (1024 ** 2)
 
-        # Sample for profiling to keep it fast on large datasets
         X_work, y_work = X, y
         if n_samples > 10_000 and y is not None:
             idx = np.random.choice(n_samples, 10_000, replace=False)
@@ -102,13 +94,11 @@ class DataProfiler:
         for i in range(n_features):
             feature = X_work[:, i]
 
-            # FIX: compute std only once
             _std = float(np.std(feature))
             std_val = _std if _std != 0 else 1e-10
 
             mean_val = float(np.mean(feature))
 
-            # FIX: targeted warning suppression instead of global filterwarnings
             with warnings.catch_warnings():
                 warnings.filterwarnings("ignore", category=RuntimeWarning)
                 try:
@@ -145,7 +135,6 @@ class DataProfiler:
 
             feature_profiles.append(fp)
 
-        # Detect task type
         class_distribution = None
         class_balance_ratio = None
         n_classes = None
@@ -166,7 +155,6 @@ class DataProfiler:
             else:
                 task_type = "regression"
 
-        # Correlation matrix (only for small feature sets)
         corr_matrix = None
         if n_features <= 20:
             try:
@@ -200,10 +188,6 @@ class DataProfiler:
             self.dataset_name, n_samples, n_features, task_type, complexity,
         )
         return self.profile
-
-    # ------------------------------------------------------------------
-    # Private helpers
-    # ------------------------------------------------------------------
 
     def _count_outliers(self, feature: np.ndarray) -> int:
         Q1 = np.percentile(feature, 25)
@@ -255,10 +239,6 @@ class DataProfiler:
             needs.append("missing_value_imputation")
         return needs if needs else ["none_required"]
 
-    # ------------------------------------------------------------------
-    # Visualisation
-    # ------------------------------------------------------------------
-
     def visualize_profile(self, save_path: Optional[str] = None) -> None:
         if self.profile is None:
             raise ValueError("Run profile_tabular_data() first.")
@@ -266,7 +246,6 @@ class DataProfiler:
         fig, axes = plt.subplots(2, 2, figsize=(14, 10))
         fig.suptitle(f"Dataset profile: {self.dataset_name}", fontsize=16, fontweight="bold")
 
-        # Feature means histogram
         axes[0, 0].hist(
             [fp.mean for fp in self.profile.feature_profiles], bins=20, color="steelblue", alpha=0.7
         )
@@ -274,7 +253,6 @@ class DataProfiler:
         axes[0, 0].set_xlabel("Mean")
         axes[0, 0].set_ylabel("Count")
 
-        # Correlation matrix
         if self.profile.feature_correlation_matrix:
             cm = np.array(self.profile.feature_correlation_matrix)
             im = axes[0, 1].imshow(cm, cmap="coolwarm", aspect="auto", vmin=-1, vmax=1)
@@ -284,7 +262,6 @@ class DataProfiler:
             axes[0, 1].text(0.5, 0.5, "Too many features (>20)", ha="center", va="center")
             axes[0, 1].set_title("Correlation matrix")
 
-        # Class distribution
         if self.profile.class_distribution:
             classes = list(self.profile.class_distribution.keys())
             counts = list(self.profile.class_distribution.values())
@@ -293,10 +270,9 @@ class DataProfiler:
             axes[1, 0].set_xlabel("Class")
             axes[1, 0].set_ylabel("Count")
         else:
-            axes[1, 0].text(0.5, 0.5, "Regression task — no class distribution", ha="center", va="center")
+            axes[1, 0].text(0.5, 0.5, "Regression task - no class distribution", ha="center", va="center")
             axes[1, 0].set_title("Class distribution")
 
-        # Outlier counts
         outlier_counts = [fp.outliers_count for fp in self.profile.feature_profiles[:10]]
         feature_names = [fp.name for fp in self.profile.feature_profiles[:10]]
         axes[1, 1].barh(feature_names, outlier_counts, color="green", alpha=0.7)
@@ -307,7 +283,7 @@ class DataProfiler:
         if save_path:
             fig.savefig(save_path, dpi=300, bbox_inches="tight")
             logger.info("Profile visualisation saved: %s", save_path)
-        plt.close(fig)  # FIX: close specific figure, not plt.close('all')
+        plt.close(fig)
 
     def print_summary(self) -> None:
         if self.profile is None:

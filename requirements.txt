@@ -1,14 +1,10 @@
-# Astra ML System — Dependencies
-# Versions are pinned to ranges to avoid breaking changes and known CVEs.
-# Run: pip install -r requirements.txt
-
-numpy>=1.24.0,<2.0.0
-pandas>=2.0.0,<3.0.0
-scipy>=1.10.0,<2.0.0
-scikit-learn>=1.3.0,<2.0.0
-matplotlib>=3.7.0,<4.0.0
-seaborn>=0.12.0,<1.0.0
-joblib>=1.3.0,<2.0.0
-streamlit>=1.35.0,<2.0.0
-chardet>=5.0.0,<6.0.0
-plotly>=5.18.0,<6.0.0
+numpy>=1.26.0,<2.0.0
+pandas>=2.1.0,<3.0.0
+scipy>=1.11.0,<2.0.0
+scikit-learn>=1.5.0,<2.0.0
+matplotlib>=3.7.2,<4.0.0
+seaborn>=0.13.0,<1.0.0
+joblib>=1.3.2,<2.0.0
+streamlit>=1.37.0,<2.0.0
+chardet>=5.2.0,<6.0.0
+plotly>=5.20.0,<6.0.0
