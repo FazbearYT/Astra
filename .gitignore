@@ -11,6 +11,9 @@ build/
 venv/
 env/
 
+.claude/
+graphify-out/
+
 .streamlit/secrets.toml
 
 data/tabular/*.csv

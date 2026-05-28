@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import io
 import json
 import logging
@@ -20,7 +21,9 @@ import plotly.express as px
 import plotly.graph_objects as go
 import seaborn as sns
 import streamlit as st
+from sklearn.impute import SimpleImputer
 from sklearn.metrics import confusion_matrix
+from sklearn.preprocessing import LabelEncoder
 
 _SCRIPT_DIR = Path(__file__).parent
 sys.path.insert(0, str(_SCRIPT_DIR))
@@ -47,6 +50,10 @@ OUTPUTS_DIR = Path("outputs")
 MAX_ROWS = 500_000
 MAX_UPLOAD_MB = 50
 SHOW_TRACEBACK_IN_UI = False
+
+APP_VERSION = "3.0.0"
+APP_YEAR = 2026
+APP_AUTHOR = "Fazbear · Eltex/РиМ/Astra Linux practicum"
 
 st.set_page_config(
     page_title="Astra ML",
@@ -370,6 +377,8 @@ _DOMAIN_KEYS = (
     "target_column", "feature_columns", "config_state",
     "model_comparison_history", "advanced_mode",
     "session_id", "output_dir", "last_preset", "config_initialized",
+    "preprocessing_summary", "target_classes",
+    "adaptation_log", "best_result_meta",
 )
 
 
@@ -384,6 +393,24 @@ def reset_session() -> None:
 def init_directories() -> None:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     OUTPUTS_DIR.mkdir(parents=True, exist_ok=True)
+    _seed_demo_datasets()
+
+
+def _seed_demo_datasets() -> None:
+    needed = {"iris.csv", "titanic.csv", "wine.csv"}
+    existing = {p.name for p in DATA_DIR.glob("*.csv")}
+    if needed.issubset(existing):
+        return
+    try:
+        gen = DataGenerator(data_dir=DATA_DIR.parent)
+        if "iris.csv" not in existing:
+            gen.create_iris_dataset()
+        if "titanic.csv" not in existing:
+            gen.create_titanic_dataset()
+        if "wine.csv" not in existing:
+            gen.create_wine_dataset()
+    except Exception as exc:
+        logger.warning("Failed to seed demo datasets: %s", exc)
 
 
 def setup_output_directory():
@@ -547,6 +574,97 @@ def format_and_save_csv(uploaded_file, save_path: Path) -> tuple[bool, str]:
     except Exception:
         logger.exception("Error processing uploaded CSV")
         return False, "Could not process the file. See server logs for details."
+
+
+def _preprocess_dataset(
+    data: pd.DataFrame, target_column: str
+) -> tuple[pd.DataFrame, pd.Series, dict, Optional[list]]:
+    summary: dict = {
+        "rows_in": int(len(data)),
+        "imputed_numeric": [],
+        "imputed_categorical": [],
+        "one_hot_columns": [],
+        "label_encoded_columns": [],
+        "dropped_high_cardinality": [],
+        "target_encoded": False,
+        "target_classes": None,
+    }
+
+    if target_column not in data.columns:
+        raise ValueError(f"Target column '{target_column}' not found in dataset.")
+
+    work = data.copy()
+    work = work.dropna(subset=[target_column])
+
+    y_raw = work[target_column]
+    target_classes: Optional[list] = None
+    if not pd.api.types.is_numeric_dtype(y_raw):
+        le = LabelEncoder()
+        y_encoded = le.fit_transform(y_raw.astype(str))
+        target_classes = [str(c) for c in le.classes_]
+        y_series = pd.Series(y_encoded, index=work.index, name=target_column)
+        summary["target_encoded"] = True
+        summary["target_classes"] = target_classes
+    else:
+        y_series = y_raw.copy()
+
+    features = work.drop(columns=[target_column])
+
+    numeric_cols = features.select_dtypes(include=np.number).columns.tolist()
+    object_cols = [c for c in features.columns if c not in numeric_cols]
+
+    if numeric_cols:
+        nan_cols = [c for c in numeric_cols if features[c].isna().any()]
+        if nan_cols:
+            imp = SimpleImputer(strategy="median")
+            features[numeric_cols] = imp.fit_transform(features[numeric_cols])
+            summary["imputed_numeric"] = nan_cols
+
+    if object_cols:
+        nan_cols = [c for c in object_cols if features[c].isna().any()]
+        if nan_cols:
+            for c in nan_cols:
+                mode = features[c].mode(dropna=True)
+                fill = mode.iloc[0] if not mode.empty else "unknown"
+                features[c] = features[c].fillna(fill)
+            summary["imputed_categorical"] = nan_cols
+
+        low_card_cols: list[str] = []
+        high_card_cols: list[str] = []
+        very_high_card_cols: list[str] = []
+        for c in object_cols:
+            n_unique = features[c].nunique()
+            if n_unique <= 1:
+                very_high_card_cols.append(c)
+            elif n_unique <= 10:
+                low_card_cols.append(c)
+            elif n_unique <= 50:
+                high_card_cols.append(c)
+            else:
+                very_high_card_cols.append(c)
+
+        if very_high_card_cols:
+            features = features.drop(columns=very_high_card_cols)
+            summary["dropped_high_cardinality"] = very_high_card_cols
+
+        if low_card_cols:
+            features = pd.get_dummies(
+                features, columns=low_card_cols, drop_first=False, dtype=float
+            )
+            summary["one_hot_columns"] = low_card_cols
+
+        for c in high_card_cols:
+            le = LabelEncoder()
+            features[c] = le.fit_transform(features[c].astype(str))
+            summary["label_encoded_columns"].append(c)
+
+    features = features.loc[:, features.apply(pd.api.types.is_numeric_dtype)]
+    features = features.astype(float)
+    y_series = y_series.loc[features.index]
+
+    summary["rows_out"] = int(len(features))
+    summary["feature_count_out"] = int(features.shape[1])
+    return features, y_series, summary, target_classes
 
 
 def set_data_and_advance(path: Path) -> None:
@@ -720,12 +838,15 @@ def render_artifacts_browser() -> None:
                     st.text("No preview for this file type.")
             with col_dl:
                 with open(resolved, "rb") as f:
+                    key_hash = hashlib.sha1(
+                        f"{run_path.name}|{rel}".encode("utf-8")
+                    ).hexdigest()[:12]
                     st.download_button(
                         "Download",
                         data=f,
                         file_name=resolved.name,
                         mime="application/octet-stream",
-                        key=f"dl_{run_path.name}_{rel}",
+                        key=f"dl_{key_hash}",
                     )
 
 
@@ -784,11 +905,19 @@ def render_comparison_chart(history: list, task_type: str = "classification") ->
     st.plotly_chart(fig, use_container_width=True)
 
 
-def render_confusion_plotly(y_true: np.ndarray, y_pred: np.ndarray, model_name: str) -> None:
+def render_confusion_plotly(
+    y_true: np.ndarray,
+    y_pred: np.ndarray,
+    model_name: str,
+    class_labels: Optional[list] = None,
+) -> None:
     try:
         labels = np.unique(np.concatenate([np.asarray(y_true), np.asarray(y_pred)]))
         cm = confusion_matrix(y_true, y_pred, labels=labels)
-        label_strs = [str(l) for l in labels]
+        if class_labels is not None and len(class_labels) >= int(np.max(labels)) + 1:
+            label_strs = [str(class_labels[int(l)]) for l in labels]
+        else:
+            label_strs = [str(l) for l in labels]
         text = [[str(int(v)) for v in row] for row in cm]
         fig = go.Figure(
             data=go.Heatmap(
@@ -1149,7 +1278,27 @@ def step_training() -> None:
     try:
         status_text.markdown("Loading dataset...")
         progress_bar.progress(10)
-        data = pd.read_csv(st.session_state.data_path)
+        try:
+            file_size_mb = st.session_state.data_path.stat().st_size / (1024 ** 2)
+        except OSError:
+            file_size_mb = 0.0
+        if file_size_mb > MAX_UPLOAD_MB:
+            raise ValueError(
+                f"Dataset is too large ({file_size_mb:.1f} MB). "
+                f"Max allowed: {MAX_UPLOAD_MB} MB."
+            )
+        data_chunks: list[pd.DataFrame] = []
+        rows_loaded = 0
+        for chunk in pd.read_csv(st.session_state.data_path, chunksize=20_000):
+            rows_loaded += len(chunk)
+            if rows_loaded > MAX_ROWS:
+                raise ValueError(
+                    f"Dataset exceeds the maximum allowed rows ({MAX_ROWS:,})."
+                )
+            data_chunks.append(chunk)
+        if not data_chunks:
+            raise ValueError("Dataset is empty.")
+        data = pd.concat(data_chunks, ignore_index=True)
         config = st.session_state.pipeline_config
 
         target_column = st.session_state.get("target_column")
@@ -1166,31 +1315,66 @@ def step_training() -> None:
                     raise ValueError("Could not find a target column. Please go back to Step 2.")
 
         st.session_state.target_column = target_column
-        y = data[target_column].values
-        feature_columns = [
-            c for c in data.columns
-            if c != target_column and pd.api.types.is_numeric_dtype(data[c])
-        ]
-        st.session_state.feature_columns = feature_columns
-        X = data[feature_columns].values
+
+        status_text.markdown("Preprocessing data...")
+        progress_bar.progress(15)
+        X_df, y_series, prep_summary, target_classes = _preprocess_dataset(
+            data, target_column
+        )
+        st.session_state.feature_columns = list(X_df.columns)
+        st.session_state.preprocessing_summary = prep_summary
+        st.session_state.target_classes = target_classes
+
+        if X_df.shape[1] < 2:
+            raise ValueError(
+                "Need at least 2 feature columns after preprocessing. "
+                "Dataset has too few usable columns."
+            )
+        if X_df.shape[0] < 30:
+            raise ValueError(
+                f"Dataset has only {X_df.shape[0]} rows after cleaning. "
+                "Minimum 30 required for stable training."
+            )
+        if y_series.nunique() < 2:
+            raise ValueError(
+                "Target column has fewer than 2 unique values. "
+                "Cannot train a classifier on a single class."
+            )
+
+        X = X_df.values
+        y = y_series.values
 
         status_text.markdown("Profiling data...")
         progress_bar.progress(25)
         profiler = DataProfiler(dataset_name=st.session_state.data_path.stem)
-        profile = profiler.profile_tabular_data(X, y, feature_names=feature_columns)
+        profile = profiler.profile_tabular_data(
+            X, y, feature_names=list(X_df.columns)
+        )
         st.session_state.profile = profile
         task_type = profile.task_type
 
-        status_text.markdown("Preparing models...")
-        progress_bar.progress(40)
+        status_text.markdown("Preparing models with profile-aware adaptation...")
+        progress_bar.progress(35)
         selector = AdaptiveModelSelector()
-        selector.register_models_from_pipeline_config(config, task_type=task_type)
-        total_models = len(selector.models)
+        selector.register_models_from_pipeline_config(
+            config, task_type=task_type, data_profile=profile.to_dict()
+        )
+        st.session_state.adaptation_log = dict(
+            getattr(selector, "adaptation_log", {})
+        )
+        status_text.markdown(
+            f"Training {len(selector.models)} model(s) with profile-aware adaptation..."
+        )
 
-        for i in range(total_models):
-            pct = 40 + int(50 * (i / total_models))
-            status_text.markdown(f"Training model {i + 1} / {total_models}...")
-            progress_bar.progress(pct)
+        def _on_model_start(idx: int, total: int, name: str) -> None:
+            pct = 35 + int(50 * ((idx - 1) / max(total, 1)))
+            try:
+                progress_bar.progress(min(85, pct))
+                status_text.markdown(
+                    f"Training [{idx}/{total}]: **{name.replace('_Specialist','')}**"
+                )
+            except Exception:
+                pass
 
         best_model, X_test, y_test = selector.profile_and_select(
             X, y,
@@ -1202,7 +1386,9 @@ def step_training() -> None:
             global_accuracy_weight=config.scoring.get("accuracy_weight", 0.7),
             global_f1_weight=config.scoring.get("f1_weight", 0.3),
             global_cv_weight=config.scoring.get("cv_weight", 0.0),
+            progress_callback=_on_model_start,
         )
+        st.session_state.best_result_meta = getattr(selector, "best_result", None)
 
         st.session_state.best_model = best_model
         st.session_state.X_test = X_test
@@ -1253,6 +1439,156 @@ def step_training() -> None:
         st.rerun()
 
 
+def _render_profile_panel() -> None:
+    profile = st.session_state.get("profile")
+    if profile is None:
+        return
+    p = profile.to_dict()
+    st.subheader("Working profile detected")
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Samples", f"{p['n_samples']:,}")
+    c2.metric("Features", p["n_features"])
+    c3.metric("Complexity", p["data_complexity"].upper())
+    if p.get("n_classes") is not None:
+        c4.metric("Classes", p["n_classes"])
+    else:
+        c4.metric("Task", p.get("task_type", "regression").title())
+
+    rec = p.get("recommended_models") or []
+    needs = p.get("preprocessing_needs") or []
+    if rec:
+        rec_tags = " ".join(f'<span class="astra-tag">{m}</span>' for m in rec)
+        st.markdown(
+            f"**Profile-recommended families:** {rec_tags}",
+            unsafe_allow_html=True,
+        )
+    if needs and needs != ["none_required"]:
+        warn_tags = " ".join(
+            f'<span class="astra-tag warn">{n.replace("_"," ")}</span>' for n in needs
+        )
+        st.markdown(
+            f"**Profile-detected preprocessing needs:** {warn_tags}",
+            unsafe_allow_html=True,
+        )
+
+    balance = p.get("class_balance_ratio")
+    if balance is not None and balance < 0.5:
+        st.warning(
+            f"Class balance ratio is {balance:.2f} (<0.5) — "
+            "imbalanced dataset, prefer balanced or boosted models."
+        )
+
+    with st.expander("Raw profile JSON", expanded=False):
+        st.json({
+            "n_samples": p["n_samples"],
+            "n_features": p["n_features"],
+            "n_classes": p.get("n_classes"),
+            "task_type": p.get("task_type"),
+            "data_complexity": p["data_complexity"],
+            "class_balance_ratio": p.get("class_balance_ratio"),
+            "recommended_models": rec,
+            "preprocessing_needs": needs,
+        })
+
+
+def _render_preprocessing_panel() -> None:
+    summary = st.session_state.get("preprocessing_summary")
+    if not summary:
+        return
+    has_actions = any(
+        summary.get(k)
+        for k in (
+            "imputed_numeric", "imputed_categorical",
+            "one_hot_columns", "label_encoded_columns",
+            "dropped_high_cardinality", "target_encoded",
+        )
+    )
+    if not has_actions:
+        return
+    with st.expander("Preprocessing applied", expanded=False):
+        lines = []
+        if summary.get("rows_in") != summary.get("rows_out"):
+            lines.append(
+                f"- Rows: {summary['rows_in']:,} → {summary['rows_out']:,}"
+            )
+        if summary.get("imputed_numeric"):
+            lines.append(
+                f"- Imputed NaN (median) in numeric columns: "
+                f"{', '.join(summary['imputed_numeric'])}"
+            )
+        if summary.get("imputed_categorical"):
+            lines.append(
+                f"- Imputed NaN (mode) in categorical columns: "
+                f"{', '.join(summary['imputed_categorical'])}"
+            )
+        if summary.get("one_hot_columns"):
+            lines.append(
+                f"- One-hot encoded (≤10 unique): "
+                f"{', '.join(summary['one_hot_columns'])}"
+            )
+        if summary.get("label_encoded_columns"):
+            lines.append(
+                f"- Label encoded (10–50 unique): "
+                f"{', '.join(summary['label_encoded_columns'])}"
+            )
+        if summary.get("dropped_high_cardinality"):
+            lines.append(
+                f"- Dropped (>50 unique or constant): "
+                f"{', '.join(summary['dropped_high_cardinality'])}"
+            )
+        if summary.get("target_encoded"):
+            classes = summary.get("target_classes") or []
+            preview = ", ".join(classes[:6]) + ("…" if len(classes) > 6 else "")
+            lines.append(
+                f"- Target label-encoded: {len(classes)} classes [{preview}]"
+            )
+        st.markdown("\n".join(lines))
+
+
+def _render_selection_explanation() -> None:
+    history = st.session_state.get("model_comparison_history") or []
+    best_meta = st.session_state.get("best_result_meta")
+    adaptation = st.session_state.get("adaptation_log") or {}
+    if not history and not best_meta:
+        return
+
+    st.subheader("Why this model was selected")
+
+    if best_meta:
+        best_name = best_meta["model"].replace("_Specialist", "")
+        profile_score = best_meta.get("profile_score", 0.0)
+        metric_score = best_meta.get("metric_score", 0.0)
+        final_score = best_meta.get("final_score", 0.0)
+        st.markdown(
+            f"**{best_name}** was chosen with a final score of **{final_score:.3f}**, "
+            f"combining a profile-match of **{profile_score:.2f}** "
+            f"and a metric score of **{metric_score:.3f}** "
+            f"(weighted 75% metrics / 25% profile fit)."
+        )
+
+    if history:
+        rivals = sorted(history, key=lambda e: e.get("final_score", 0), reverse=True)[1:3]
+        if rivals and best_meta:
+            best_final = best_meta.get("final_score", 0.0)
+            for r in rivals:
+                gap = best_final - r.get("final_score", 0.0)
+                st.caption(
+                    f"vs **{r['model'].replace('_Specialist','')}**: "
+                    f"−{gap:.3f} ({r.get('metric_score',0):.3f} metric · "
+                    f"{r.get('profile_score',0):.2f} profile)"
+                )
+
+    if adaptation:
+        with st.expander("Profile-driven hyperparameter adaptation", expanded=False):
+            for name, notes in adaptation.items():
+                if not notes:
+                    continue
+                short = name.replace("_Specialist", "")
+                st.markdown(f"**{short}**")
+                for n in notes:
+                    st.markdown(f"  · {n}")
+
+
 def step_results() -> None:
     st.header("Step 4 - Results")
 
@@ -1290,18 +1626,9 @@ def step_results() -> None:
         with col3:
             st.metric("RMSE", f"{res.get('rmse', 0):.4f}")
 
-    if st.session_state.profile:
-        with st.expander("Data profile", expanded=False):
-            p = st.session_state.profile.to_dict()
-            st.json({
-                "n_samples": p["n_samples"],
-                "n_features": p["n_features"],
-                "n_classes": p.get("n_classes"),
-                "task_type": p.get("task_type"),
-                "data_complexity": p["data_complexity"],
-                "recommended_models": p["recommended_models"],
-                "preprocessing_needs": p["preprocessing_needs"],
-            })
+    _render_profile_panel()
+    _render_preprocessing_panel()
+    _render_selection_explanation()
 
     if (
         task_type == "classification"
@@ -1315,6 +1642,7 @@ def step_results() -> None:
             render_confusion_plotly(
                 st.session_state.y_test, y_pred,
                 st.session_state.best_model.name.replace("_Specialist", ""),
+                class_labels=st.session_state.get("target_classes"),
             )
         except Exception as exc:
             logger.warning("Could not render confusion matrix: %s", exc)
@@ -1376,7 +1704,7 @@ def step_results() -> None:
 def render_sidebar() -> None:
     with st.sidebar:
         st.markdown("### Astra ML")
-        st.caption("v2.9.0 - dataset-driven model selection")
+        st.caption(f"v{APP_VERSION} · dataset-driven model selection")
         st.divider()
 
         step = st.session_state.get("step", 0)
@@ -1434,7 +1762,9 @@ def main() -> None:
         step_results()
 
     st.markdown(
-        '<div class="astra-footer">Astra ML System &middot; v2.9.0 &middot; powered by scikit-learn</div>',
+        f'<div class="astra-footer">'
+        f'Astra ML &middot; v{APP_VERSION} &middot; {APP_YEAR} &middot; {APP_AUTHOR}'
+        f'</div>',
         unsafe_allow_html=True,
     )
 

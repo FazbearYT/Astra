@@ -5,7 +5,7 @@ import time
 import warnings
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import joblib
 import numpy as np
@@ -27,10 +27,15 @@ from sklearn.metrics import (
     recall_score,
 )
 from sklearn.model_selection import cross_val_score, train_test_split
+from sklearn.naive_bayes import GaussianNB
+from sklearn.neighbors import KNeighborsClassifier, KNeighborsRegressor
 from sklearn.neural_network import MLPClassifier, MLPRegressor
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 from sklearn.svm import SVC, SVR
+from sklearn.tree import DecisionTreeClassifier, DecisionTreeRegressor
+
+from .pipeline_config import adapt_params_to_profile
 
 logger = logging.getLogger(__name__)
 
@@ -88,6 +93,20 @@ _PARAM_LIMITS: Dict[str, Dict[str, Tuple]] = {
         "alpha": (float, 1e-6, 1000.0),
         "max_iter": (int, 10, 5000),
     },
+    "KNN_Specialist": {
+        "n_neighbors": (int, 1, 100),
+        "leaf_size": (int, 1, 200),
+        "p": (int, 1, 3),
+    },
+    "GaussianNB_Specialist": {
+        "var_smoothing": (float, 1e-12, 1e-3),
+    },
+    "DecisionTree_Specialist": {
+        "max_depth": (int, 1, 50),
+        "min_samples_leaf": (int, 1, 100),
+        "min_samples_split": (int, 2, 200),
+        "random_state": (int, 0, 9999),
+    },
 }
 
 _ALLOWED_KERNELS = {"rbf", "linear", "poly", "sigmoid"}
@@ -95,6 +114,8 @@ _ALLOWED_ACTIVATIONS = {"relu", "tanh", "logistic", "identity"}
 _ALLOWED_SOLVERS_LR = {"lbfgs", "liblinear", "saga", "sag", "newton-cg"}
 _ALLOWED_SOLVERS_MLP = {"adam", "sgd", "lbfgs"}
 _ALLOWED_PENALTIES_LR = {"l1", "l2", "elasticnet", None}
+_ALLOWED_KNN_WEIGHTS = {"uniform", "distance"}
+_ALLOWED_DT_CRITERIA = {"gini", "entropy", "log_loss"}
 
 
 def validate_model_params(model_name: str, params: Dict[str, Any]) -> Dict[str, Any]:
@@ -166,6 +187,18 @@ def validate_model_params(model_name: str, params: Dict[str, Any]) -> Dict[str, 
             continue
         if key in ("probability",):
             sanitised[key] = bool(value)
+            continue
+        if key == "weights":
+            v = str(value).lower()
+            if v not in _ALLOWED_KNN_WEIGHTS:
+                raise ValueError(f"Invalid weights '{value}'. Allowed: {_ALLOWED_KNN_WEIGHTS}")
+            sanitised[key] = v
+            continue
+        if key == "criterion":
+            v = str(value).lower()
+            if v not in _ALLOWED_DT_CRITERIA:
+                raise ValueError(f"Invalid criterion '{value}'. Allowed: {_ALLOWED_DT_CRITERIA}")
+            sanitised[key] = v
             continue
 
         spec = limits.get(key)
@@ -364,7 +397,7 @@ class AdaptiveModelSelector:
     def _get_sklearn_model_instance(
         self, model_name: str, params: Dict[str, Any], task_type: str = "classification"
     ) -> BaseEstimator:
-        p = params.copy()
+        p = {k: v for k, v in params.items() if not k.startswith("_")}
         if task_type == "classification":
             if model_name == "RandomForest_Specialist":
                 return RandomForestClassifier(**p)
@@ -376,6 +409,12 @@ class AdaptiveModelSelector:
                 return Pipeline([("scaler", StandardScaler()), ("mlp", MLPClassifier(**p))])
             if model_name == "LogisticRegression_Specialist":
                 return Pipeline([("scaler", StandardScaler()), ("lr", LogisticRegression(**p))])
+            if model_name == "KNN_Specialist":
+                return Pipeline([("scaler", StandardScaler()), ("knn", KNeighborsClassifier(**p))])
+            if model_name == "GaussianNB_Specialist":
+                return GaussianNB(**p)
+            if model_name == "DecisionTree_Specialist":
+                return DecisionTreeClassifier(**p)
         else:
             if model_name == "RandomForest_Specialist":
                 return RandomForestRegressor(**p)
@@ -389,19 +428,33 @@ class AdaptiveModelSelector:
                 return Pipeline([("scaler", StandardScaler()), ("ridge", Ridge(**p))])
             if model_name == "Lasso_Specialist":
                 return Pipeline([("scaler", StandardScaler()), ("lasso", Lasso(**p))])
+            if model_name == "KNN_Specialist":
+                return Pipeline([("scaler", StandardScaler()), ("knn", KNeighborsRegressor(**p))])
+            if model_name == "DecisionTree_Specialist":
+                return DecisionTreeRegressor(**p)
 
         raise ValueError(f"Unknown model '{model_name}' for task '{task_type}'")
 
     def register_models_from_pipeline_config(
-        self, pipeline_config, task_type: str = "classification"
+        self,
+        pipeline_config,
+        task_type: str = "classification",
+        data_profile: Optional[Dict[str, Any]] = None,
     ) -> None:
         self.models = []
+        self.adaptation_log: Dict[str, List[str]] = {}
         for model_key, model_cfg in pipeline_config.models.items():
             if not model_cfg.enabled:
                 continue
             try:
+                adapted_params = adapt_params_to_profile(
+                    model_cfg.name, model_cfg.params, data_profile
+                )
+                notes = adapted_params.pop("_adaptation_notes", [])
+                if notes:
+                    self.adaptation_log[model_cfg.name] = notes
                 sklearn_model = self._get_sklearn_model_instance(
-                    model_cfg.name, model_cfg.params, task_type
+                    model_cfg.name, adapted_params, task_type
                 )
                 self.register_model(
                     SpecializedModel(
@@ -430,6 +483,8 @@ class AdaptiveModelSelector:
         global_accuracy_weight: float = 0.7,
         global_f1_weight: float = 0.3,
         global_cv_weight: float = 0.0,
+        profile_influence: float = 0.25,
+        progress_callback: Optional[Callable[[int, int, str], None]] = None,
     ) -> Tuple["SpecializedModel", np.ndarray, np.ndarray]:
         configure_threading()
 
@@ -453,9 +508,17 @@ class AdaptiveModelSelector:
             stratify=stratify_y,
         )
 
+        effective_cv = max(2, min(cv_folds, X_train.shape[0] // 5 if X_train.shape[0] >= 10 else 2))
+        if task_type == "classification":
+            min_class = int(np.min(np.bincount(np.asarray(y_train).astype(int)))) if len(y_train) else 0
+            if min_class > 0:
+                effective_cv = max(2, min(effective_cv, min_class))
+        if effective_cv != cv_folds:
+            logger.info("cv_folds reduced %d → %d (small dataset)", cv_folds, effective_cv)
+
         logger.info(
             "Starting model selection | task=%s | train=%d test=%d | cv_folds=%d",
-            task_type, X_train.shape[0], X_test.shape[0], cv_folds,
+            task_type, X_train.shape[0], X_test.shape[0], effective_cv,
         )
 
         if not self.models:
@@ -468,9 +531,15 @@ class AdaptiveModelSelector:
 
         results_table: List[Dict] = []
         total = len(model_scores)
+        profile_influence = float(max(0.0, min(1.0, profile_influence)))
 
         for idx, (model, profile_score) in enumerate(model_scores, 1):
             logger.info("[%d/%d] %s - profile_score=%.3f", idx, total, model.name, profile_score)
+            if progress_callback is not None:
+                try:
+                    progress_callback(idx, total, model.name)
+                except Exception:
+                    pass
             try:
                 t0 = time.time()
                 model.fit(X_train, y_train)
@@ -483,7 +552,7 @@ class AdaptiveModelSelector:
                 cv_results: Dict[str, Any] = {"cv_mean": 0.0, "cv_std": 0.0, "cv_scores": []}
                 if use_cv_in_scoring or global_cv_weight > 0:
                     cv_results = model.cross_validate(
-                        X_train, y_train, cv=cv_folds, task_type=task_type
+                        X_train, y_train, cv=effective_cv, task_type=task_type
                     )
                     logger.info("  CV mean=%.4f +/- %.4f", cv_results["cv_mean"], cv_results["cv_std"])
 
@@ -498,7 +567,7 @@ class AdaptiveModelSelector:
                         + (cv_results["cv_mean"] * cv_w if use_cv_in_scoring else 0.0)
                     )
                     total_w = acc_w + f1_w + (cv_w if use_cv_in_scoring else 0.0)
-                    final_score = raw / total_w if total_w > 0 else raw
+                    metric_score = raw / total_w if total_w > 0 else raw
                 else:
                     r2_w = model.custom_scoring_weights.get("r2_weight", global_accuracy_weight)
                     rmse_w = model.custom_scoring_weights.get("rmse_weight", global_f1_weight)
@@ -509,13 +578,22 @@ class AdaptiveModelSelector:
                         + (cv_results["cv_mean"] * cv_w if use_cv_in_scoring else 0.0)
                     )
                     total_w = r2_w + rmse_w + (cv_w if use_cv_in_scoring else 0.0)
-                    final_score = raw / total_w if total_w > 0 else raw
+                    metric_score = raw / total_w if total_w > 0 else raw
 
-                logger.info("  Final score=%.4f", final_score)
+                final_score = (
+                    (1.0 - profile_influence) * metric_score
+                    + profile_influence * profile_score
+                )
+
+                logger.info(
+                    "  Metric=%.4f Profile=%.4f → Final=%.4f (influence=%.2f)",
+                    metric_score, profile_score, final_score, profile_influence,
+                )
 
                 results_table.append({
                     "model": model.name,
                     "profile_score": profile_score,
+                    "metric_score": metric_score,
                     "task_type": task_type,
                     **metrics,
                     "cv_mean": cv_results["cv_mean"],
@@ -525,9 +603,11 @@ class AdaptiveModelSelector:
                 self.selection_history.append({
                     "model": model.name,
                     "profile_score": profile_score,
+                    "metric_score": metric_score,
                     "metrics": metrics,
                     "cv_results": cv_results,
                     "final_score": final_score,
+                    "profile_influence": profile_influence,
                     "task_type": task_type,
                     "timestamp": datetime.now().isoformat(),
                 })
@@ -552,6 +632,7 @@ class AdaptiveModelSelector:
             raise RuntimeError(f"Best model '{best_result['model']}' not found in registered models.")
 
         self.best_model = best_model
+        self.best_result = best_result
         logger.info("Selected: %s (score=%.4f)", best_model.name, best_result["final_score"])
         return best_model, X_test, y_test
 
