@@ -9,45 +9,42 @@ class DummyProgressBar:
     def __init__(self, *args, **kwargs):
         pass
 
-    def update(self, n=1):
+    def update(self, n: int = 1) -> None:
         pass
 
-    def close(self):
+    def close(self) -> None:
         pass
 
-    def set_description(self, desc):
+    def set_description(self, desc: str) -> None:
         pass
 
-    def __enter__(self):
+    def __enter__(self) -> "DummyProgressBar":
         return self
 
-    def __exit__(self, *args):
+    def __exit__(self, *args) -> None:
         pass
 
     def __iter__(self):
         return iter([])
 
 
-def get_progress_bar(iterable: Optional[Iterable] = None,
-                     total: Optional[int] = None,
-                     desc: str = "",
-                     unit: str = "it",
-                     disable: bool = False,
-                     **kwargs):
+def get_progress_bar(
+    iterable: Optional[Iterable] = None,
+    total: Optional[int] = None,
+    desc: str = "",
+    unit: str = "it",
+    disable: bool = False,
+    **kwargs,
+):
     if not PROGRESS_ENABLED or disable:
-        if iterable is not None:
-            return iterable
-        else:
-            return DummyProgressBar()
+        return iterable if iterable is not None else DummyProgressBar()
 
     try:
         from tqdm import tqdm
+
         return tqdm(iterable=iterable, total=total, desc=desc, unit=unit, **kwargs)
     except ImportError:
-        if iterable is not None:
-            return iterable
-        else:
-            return DummyProgressBar()
+        return iterable if iterable is not None else DummyProgressBar()
 
 
 def progress_range(start, stop=None, step=1, desc=""):
@@ -62,6 +59,7 @@ def progress_range(start, stop=None, step=1, desc=""):
 
     try:
         from tqdm import trange
+
         return trange(start, stop, step, desc=desc, total=total)
     except ImportError:
         return range(start, stop, step)
@@ -75,21 +73,22 @@ def progress_context(message: str = "", total: int = 1):
 
     try:
         from tqdm import tqdm
+
         with tqdm(total=total, desc=message, file=sys.stdout) as pbar:
             yield pbar
     except ImportError:
         yield DummyProgressBar()
 
 
-def enable_progress():
+def enable_progress() -> None:
     global PROGRESS_ENABLED
     PROGRESS_ENABLED = True
 
 
-def disable_progress():
+def disable_progress() -> None:
     global PROGRESS_ENABLED
     PROGRESS_ENABLED = False
 
 
-def is_progress_enabled():
+def is_progress_enabled() -> bool:
     return PROGRESS_ENABLED
