@@ -11,6 +11,9 @@ build/
 venv/
 env/
 
+/presentation
+HANDOFF.md
+Код-ревью-Astra-ML.md
 .claude/
 graphify-out/
 
