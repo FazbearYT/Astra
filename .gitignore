@@ -11,7 +11,9 @@ build/
 venv/
 env/
 
+*.pdf
 /presentation
+RELEASE_3.0.1.md
 HANDOFF.md
 Код-ревью-Astra-ML.md
 .claude/
