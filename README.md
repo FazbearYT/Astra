@@ -93,3 +93,5 @@ README.md
 ## Лицензия
 
 Используется в учебных целях.
+ 
+<!-- Contributor: @FazbearYT --> 
