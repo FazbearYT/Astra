@@ -45,6 +45,7 @@
 ```bash
 python -m pip install -r requirements.txt
 streamlit run web_app.py
+
 ```
 
 Откроется на `http://localhost:8501`. При первом запуске будут
