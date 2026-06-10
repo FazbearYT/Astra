@@ -18,7 +18,7 @@ HANDOFF.md
 Код-ревью-Astra-ML.md
 .claude/
 graphify-out/
-
+*.docx
 .streamlit/secrets.toml
 
 data/tabular/*.csv
