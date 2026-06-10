@@ -4,21 +4,13 @@ After=network.target
 
 [Service]
 Type=simple
-# Пользователь, под которым крутится сервис (создан через adduser в гайде НГТУ).
-# Если разворачиваете под root — поставьте User=root и пути /root/astra.
 User=astra
-WorkingDirectory=/home/astra/astra
-# Запускаем streamlit из виртуального окружения, слушаем ВСЕ интерфейсы (0.0.0.0),
-# чтобы приложение было видно снаружи, а не только с самого сервера.
-ExecStart=/home/astra/astra/.venv/bin/streamlit run web_app.py \
-    --server.address 0.0.0.0 \
-    --server.port 8501 \
-    --server.headless true \
-    --browser.gatherUsageStats false
+WorkingDirectory=/home/astra/Astra
+ExecStart=/home/astra/Astra/.venv/bin/streamlit run web_app.py --server.address 0.0.0.0 --server.port 8501 --server.headless true --browser.gatherUsageStats false
 Restart=always
 RestartSec=3
-# Streamlit пишет демо-датасеты и outputs/ внутри рабочей папки — даём права.
 Environment=PYTHONUNBUFFERED=1
 
 [Install]
 WantedBy=multi-user.target
+EOF
